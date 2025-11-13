@@ -1,0 +1,11 @@
+# Ignora file di grandi dimensioni
+*.db
+*.ts
+*.zip
+*.exe
+*.dll
+*.o
+*.pdb
+*.lib
+
+/build/
