@@ -108,36 +108,34 @@ TimeSeries_SoA loadDatasetSoA(const vector<string>& rawDataset){
     TimeSeries_SoA dataset ;
 
     string delimiter = ":";
+    size_t series_size = rawDataset.size();
 
-    #pragma omp parallel
-    {
-        TimeSeries_SoA local_dataset;
+    size_t pos_first = rawDataset[0].find_last_of(delimiter); //lunghezza serie della prima riga per preallocare
+    vector<double> first_serie = DataParse(rawDataset[0].substr(0, pos_first));
+    dataset.serie_lenght = first_serie.size();
 
-        #pragma omp for nowait
-        for (int i=0 ; i< rawDataset.size();  ++i){
-            string _line = rawDataset[i];
+    //si può fare la pre-allocazione totale
+    dataset.all_data_flat.resize(series_size * dataset.serie_lenght); 
+    dataset.all_classes.resize(series_size);
+    
+    #pragma omp parallel for schedule(static) // Ogni thread scrive direttamente nella posizione corretta del vettore flat e classes, evitando così la necessità di un vettore di dataset parziali e della sezione critica
+    for  (int i = 0; i < series_size; ++i ){
+        string _line = rawDataset[i];
+        size_t pos_delim = _line.find_last_of(delimiter); //size_t per evitare warning in caso npos
+        
+        // Estrazione classe
+        dataset.all_classes[i] = stoi(_line.substr(pos_delim + 1)); //string to integer
 
-            size_t pos_delim = _line.find_last_of(delimiter); //size_t per evitare warning in caso npos
-            string token = _line.substr(pos_delim + 1);
-            string data_str = _line.substr(0, pos_delim);
-            
+        //Parsing dati 
+        vector<double> serie = DataParse(_line.substr(0, pos_delim));
 
-            local_dataset.all_data.push_back(DataParse(data_str));
-            local_dataset.all_classes.push_back(stoi(token));
-            
-        }
-        #pragma omp critical
-        {
-            partial_datasets.push_back(local_dataset);
-        }
+        // Copia veloce nel vettore flat
+        size_t offset = i * dataset.serie_lenght;
+        std::copy(serie.begin(), serie.end(), dataset.all_data_flat.begin() + offset); //sposta blocchi di dati. Begin punto di partenza, end punto fine sorgente + offset è il punto di partenza nel vettore flat
+        // diventa per alcuni compilatori memcpy , sfrutta la larghezza di banda massima della memoria RAM
     }
 
-    for (const auto& pd : partial_datasets) {
-        dataset.all_data.insert(dataset.all_data.end(), pd.all_data.begin(), pd.all_data.end()); // appendi tutto il pd alla fine del dataset
-        dataset.all_classes.insert(dataset.all_classes.end(), pd.all_classes.begin(), pd.all_classes.end());
-    }
-
-    cout<<"loaded "<<dataset.all_data.size()<<" time series (SoA) from file  "<<endl;
+    cout<<"loaded "<<dataset.all_data_flat.size()/dataset.serie_lenght<<" time series (SoA) from file  "<<endl;
     return dataset;
 }
 
@@ -145,50 +143,50 @@ TimeSeries_SoA loadDatasetSoA(const vector<string>& rawDataset){
 
 
  
-int SAD_Search(const vector<double>& T, const vector<double>& Q){ // T --> è la serie di 5120 misurazioi sulla quale confrontare la query Q
-    if (Q.size()>T.size() || T.empty() || Q.empty()){
-        throw runtime_error("Error in SAD_Search: query size greater than time series size or empty series");
-    }
-
-    double min_sad = std::numeric_limits<double>::max(); // val max di un double così da essere sicuri che la prima somma calcolata sia minore
+int SAD_Search(const double* T,int N, const vector<double>& Q){ // T --> è il puntatore alla serie di 5120 misurazioi sulla quale confrontare la query Q
+    double min_sad = std::numeric_limits<double>::max();
     int best_index = -1;
-    int N = T.size();
-    int M = Q.size();
-    for (int i = 0; i <= N - M; ++i) {
+    int M = Q.size(); // lunghezza query
+    const double* Q_ptr = Q.data(); // ottieni il puntatore alla query
+
+    for (int i=0; i<= N-M; ++i){
         double current_sad = 0.0;
 
-        #pragma omp simd reduction(+:current_sad)
-        for (int j = 0; j < M; ++j) {
-            current_sad += std::abs(T[i + j] - Q[j]);
+        #pragma omp simd reduction(+:current_sad) // SIMD per vettorizzare il calcolo del SAD, reduction per sommare in parallelo
+        for (int j=0; j<M; ++j){
+            current_sad += std::abs(T[i+j] - Q_ptr[j]);
         }
         if (current_sad < min_sad) {
             min_sad = current_sad;
             best_index = i;
         }
+
     }
+
     return best_index;
 }
 
-
-
 // stessa query
-vector<int> ParallelSearch_AoS(const vector<TimeSeries>& dataset, 
-                                 const vector<double>& query) {
+vector<int> ParallelSearch_AoS(const vector<TimeSeries>& dataset, const vector<double>& query) {
+    
     vector<int> results(dataset.size()); // Preallocazione
 
     #pragma omp parallel for 
     for (int i = 0; i < dataset.size(); ++i) {
-        results[i] = SAD_Search(dataset[i].data, query); 
+        results[i] = SAD_Search(dataset[i].data.data(), dataset[i].data.size(), query); 
     }
     return results;
 }
 
 vector<int> ParallelSearch_SoA(const TimeSeries_SoA& dataset, const vector<double>& query){
-    vector<int> results(dataset.all_data.size());    //preallocazione per non dover usare critical
+    int numDataRows = dataset.all_classes.size();
+    int L = dataset.serie_lenght;
+    vector<int> results(numDataRows);    //preallocazione per non dover usare critical
 
     #pragma omp parallel for 
-    for (int i=0; i < dataset.all_data.size(); ++i){
-        results[i] = SAD_Search(dataset.all_data[i], query);
+    for (int i=0; i < numDataRows; ++i){
+        const double* series_ptr = &dataset.all_data_flat[i * L]; // Calcola l'offset per accedere alla serie i-esima
+        results[i] = SAD_Search(series_ptr, L, query);
     }
     return results;
 }
@@ -205,7 +203,7 @@ vector<vector<int>> MultiQueryParallelSearch_AoS(const vector<TimeSeries>& datas
     for (int q_idx = 0; q_idx < numQueries; ++q_idx) {
         for (int i = 0; i < numDataRows; ++i) {
             // La differenza è qui:
-            all_results[q_idx][i] = SAD_Search(dataset[i].data, queries[q_idx]);
+            all_results[q_idx][i] = SAD_Search(dataset[i].data.data(), dataset[i].data.size(), queries[q_idx]);
         }
     } 
     return all_results;
@@ -213,14 +211,15 @@ vector<vector<int>> MultiQueryParallelSearch_AoS(const vector<TimeSeries>& datas
 
 vector<vector<int>> MultiQueryParallelSearch_SoA(const TimeSeries_SoA& dataset, const vector<vector<double>>& queries){
     int numQueries = queries.size();
-    int numDataRows = dataset.all_data.size();
-
+    int numDataRows = dataset.all_classes.size();
+    int L = dataset.serie_lenght;
     vector<vector<int>> all_results(numQueries, vector<int>(numDataRows));
 
     #pragma omp parallel for collapse(2)  // Parallelizza su entrambe le dimensioni --> ( num_query x num_righe )/num_thread 
     for (int q_idx = 0; q_idx < numQueries; ++q_idx) {
         for (int i = 0; i < numDataRows; ++i) {
-            all_results[q_idx][i] = SAD_Search(dataset.all_data[i], queries[q_idx]);
+            const double* series_ptr = &dataset.all_data_flat[i * L]; // Calcola l'offset per accedere alla serie i-esima
+            all_results[q_idx][i] = SAD_Search(series_ptr, L, queries[q_idx]);
         }
     } 
     
@@ -228,27 +227,31 @@ vector<vector<int>> MultiQueryParallelSearch_SoA(const TimeSeries_SoA& dataset, 
 }
 
 std::vector<double> RandomQuery(const TimeSeries_SoA& dataset, size_t lunghezzaQuery, std::mt19937& gen){
-    if (dataset.all_data.empty()) {
+    size_t numSeries = dataset.all_classes.size();
+    
+    if (numSeries == 0) {
         std::cerr << "ERROR: Dataset is empty." << std::endl;
         return {};
     }
-    if (lunghezzaQuery == 0) {
-        std::cerr << "ERROR: Query length cannot be zero." << std::endl;
+    if (lunghezzaQuery == 0 || lunghezzaQuery > dataset.serie_lenght) {
+        std::cerr << "ERROR: Query length invalid." << std::endl;
         return {};
     }
-    std::uniform_int_distribution<size_t> row_dist(0, dataset.all_data.size() - 1);
+    std::uniform_int_distribution<size_t> row_dist(0, numSeries - 1);
     size_t row = row_dist(gen);
-
-    const auto& serie = dataset.all_data[row];
-    if (lunghezzaQuery > serie.size()) {
-        std::cerr << "ERROR: Query length > series size (" << serie.size() << ")" << std::endl;
-        return {};
-    }
-
-    // scegli un indice di inizio casuale affinché la sottoserie rientri nella serie
-    size_t max_start = serie.size() - lunghezzaQuery;
+    
+    // 3. Calcoliamo l'indice di inizio massimo all'interno della riga scelta
+    size_t max_start = dataset.serie_lenght - lunghezzaQuery;
     std::uniform_int_distribution<size_t> start_dist(0, max_start);
-    size_t start = start_dist(gen);
+    size_t start_in_row = start_dist(gen);
 
-    return std::vector<double>(serie.begin() + start, serie.begin() + start + lunghezzaQuery);
+    // 4. Calcoliamo l'offset globale nel vettore FLAT
+    // L'inizio è: (indice_riga * lunghezza_riga) + punto_di_inizio_nella_riga
+    size_t global_start_index = (row * dataset.serie_lenght) + start_in_row;
+
+    // 5. Estraiamo la sottoserie usando gli iteratori del vettore piatto
+    return std::vector<double>(
+        dataset.all_data_flat.begin() + global_start_index, 
+        dataset.all_data_flat.begin() + global_start_index + lunghezzaQuery
+    );
 }

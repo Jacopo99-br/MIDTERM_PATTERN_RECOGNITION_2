@@ -12,25 +12,37 @@ except FileNotFoundError:
 # Imposta lo stile estetico
 sns.set_theme(style="whitegrid")
 
-# Creiamo una figura con due sottografici (Subplots)
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+df['TimeS'] = df['TimeMS'] / 1000.0  # Converti ms in secondi
 
-# GRAFICO 1: Tempo di esecuzione Multi-Query al variare del numero di query
-# Filtriamo per una lunghezza specifica, ad esempio 500
-df_500 = df[(df['Type'] == 'Multi') & (df['QueryLength'] == 500)]
-sns.lineplot(data=df_500, x='NumQueries', y='TimeMS', hue='Format', marker='o', ax=ax1)
-ax1.set_title('Multi-Query Performance (Lunghezza: 500)')
-ax1.set_ylabel('Tempo (ms)')
-ax1.set_xlabel('Numero di Query')
+query_lengths = sorted(df['QueryLength'].unique())
+num_queries = sorted(df['NumQueries'].unique())
 
-# GRAFICO 2: Impatto della Lunghezza Query (con NumQueries fissato a 50)
-df_q50 = df[(df['Type'] == 'Multi') & (df['NumQueries'] == 50)]
-sns.barplot(data=df_q50, x='QueryLength', y='TimeMS', hue='Format', ax=ax2)
-ax2.set_title('Impatto Lunghezza Query (50 Query totali)')
-ax2.set_ylabel('Tempo (ms)')
-ax2.set_xlabel('Lunghezza Query')
+df_single = df[df['Type'] == 'Single']
+
+##  FIG 1 PER SINGLE QUERY
+
+plt.figure(figsize=(12, 6))
+sns.barplot(x='QueryLength', y='TimeS', data=df_single, hue='Format')
+plt.title('Single Query Performance: AoS vs SoA')
+plt.xlabel('Query Length')
+plt.ylabel('Time (s)')
+plt.savefig('single_query_performance.png')
+plt.close()
+
+
+## FIG 2 PER MULTIPLE QUERIES
+df_multi= df[df['Type'] == 'Multi']
+
+fig, axes = plt.subplots(len(num_queries), 1, figsize=(12, 6 * len(num_queries)), sharex=True)
+
+for i, num_q in enumerate(num_queries):
+    ax = axes[i]
+    subset = df_multi[df_multi['NumQueries'] == num_q]
+    sns.barplot(data=subset, x='QueryLength', y='TimeS', hue='Format', ax=ax)
+    ax.set_title(f'Multiple Queries Performance: {num_q} Queries')
+    ax.set_xlabel('Query Length')
+    ax.set_ylabel('Time (s)')
 
 plt.tight_layout()
-plt.savefig('benchmark_plots.png')
-print("Grafici salvati con successo in 'benchmark_plots.png'")
-plt.show()
+plt.savefig('multiple_queries_performance.png')
+plt.close()
