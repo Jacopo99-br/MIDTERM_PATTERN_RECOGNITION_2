@@ -1,0 +1,36 @@
+%%bash
+cd /content && rm -rf /content/* /content/.* 2>/dev/null
+
+git clone https://github.com/Jacopo99-br/MIDTERM_PATTERN_RECOGNITION_2 .
+
+wget "https://www.timeseriesclassification.com/aeon-toolkit/FaultDetectionA.zip" -O dataset.zip
+unzip dataset.zip && rm dataset.zip
+
+mkdir -p build && cd build
+cmake ..
+make -j$(nproc)
+./Project_TSPR
+
+
+
+
+sito : https://www.timeseriesclassification.com/dataset.php?train=&test=%3E1000&leng=&class=&type=
+
+test size : 2728 serie da 5120 valori
+
+
+[ VRAM / Global Memory ]  ──── (Lenta, 111 MB)  ───> Contiene il Dataset `d_data`
+             │
+             ├─── (1 solo trasferimento coalescente per Warp)
+             ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │ STREAMING MULTIPROCESSOR (SM)                                │
+  │                                                             │
+  │  [ Constant Cache ] ───> Contiene la Query (Istantanea!)   │
+  │                                                             │
+  │  ┌───────────────────────────────────────────────────────┐  │
+  │  │ REGISTRI PRIVATI DEL THREAD 42                        │  │
+  │  │  - `min_distance`                                     │  │
+  │  │  - `best_match_idx`                                   │  │
+  │  └───────────────────────────────────────────────────────┘  │
+  └─────────────────────────────────────────────────────────────┘

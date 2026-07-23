@@ -12,6 +12,7 @@ using namespace std::chrono;
 int main() {
     
     string path = "C:\\Users\\jbrus\\Documents\\UNI\\MAGISTRALE\\PARALLEL\\PROGETTI\\MIDTERM_PATTERN_RECOGNITION\\FaultDetectionA\\FaultDetectionA_TEST.ts";
+    // https://www.timeseriesclassification.com/dataset.php?train=&test=%3E1000&leng=&class=&type=
     std::random_device rd;
     std::mt19937 gen(rd());
     //const int NUM_QUERIES = 5;

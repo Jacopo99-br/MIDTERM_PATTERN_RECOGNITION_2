@@ -2,19 +2,21 @@
 #define TIMESERIES_CUDA_CUH
 
 #include <vector>
-#include "timeseries.h" // Per accedere alla struttura TimeSeries_SoA se necessaria
+#include "timeseries.h"
 
-// ============================================================================
-// DICHIARAZIONE FUNZIONI WRAPPER GPU (Interfaccia C++)
-// Queste funzioni vengono chiamate da main.cpp
-// ============================================================================
+// Dimensione massima della query memorizzabile nella Constant Memory della GPU (es. 1024 double)
+#ifndef MAX_QUERY_LEN
+#define MAX_QUERY_LEN 1024
+#endif
 
-// Ricerca di una singola query su GPU
+#define DATASET_NUM_SERIES 2728
+#define DATASET_SERIES_LEN 5120
+
 std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset, 
-                           const std::vector<double>& single_query);
+                               const std::vector<double>& query);
 
-// Ricerca parallela di query multiple su GPU
+
 std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const TimeSeries_SoA& dataset, 
-                                             const std::vector<std::vector<double>>& all_queries);
+                                                      const std::vector<std::vector<double>>& queries);
 
 #endif // TIMESERIES_CUDA_CUH
