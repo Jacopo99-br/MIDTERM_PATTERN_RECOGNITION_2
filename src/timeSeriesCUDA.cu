@@ -85,9 +85,11 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
 std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset, 
                                const std::vector<double>& query) 
 {
+
     int num_series = dataset.all_data.size();        // CORRETTO: usa 'all_data'
     int series_len = dataset.serie_lenght;           // CORRETTO: usa 'serie_lenght'
     int total_elements = num_series * series_len;
+    int query_len = query.size();
 
 // Nel ciclo di trasposizione (CPU -> True SoA):
     /*

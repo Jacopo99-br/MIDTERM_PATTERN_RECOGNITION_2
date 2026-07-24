@@ -4,7 +4,7 @@ cd /content && rm -rf /content/* /content/.* 2>/dev/null
 git clone https://github.com/Jacopo99-br/MIDTERM_PATTERN_RECOGNITION_2 .
 
 wget "https://www.timeseriesclassification.com/aeon-toolkit/FaultDetectionA.zip" -O dataset.zip
-unzip dataset.zip && rm dataset.zip
+unzip dataset.zip -d FaultDetectionA && rm dataset.zip
 
 mkdir -p build && cd build
 cmake ..

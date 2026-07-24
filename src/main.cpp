@@ -1,28 +1,43 @@
 #include <iostream>
 #include <vector>
-#include "timeseries.h" 
+//#include "timeseries.h" 
 #include <omp.h>
 #include <chrono>
 #include <random>
 #include <fstream>
+#include <filesystem>
 #include <cstdlib> // per system()
+#include <timeSeriesCUDA.cuh>
 
 using namespace std;
 using namespace std::chrono;
+namespace fs = std::filesystem;
 int main() {
-    
-    string path = "C:\\Users\\jbrus\\Documents\\UNI\\MAGISTRALE\\PARALLEL\\PROGETTI\\MIDTERM_PATTERN_RECOGNITION\\FaultDetectionA\\FaultDetectionA_TEST.ts";
+    fs::path dataset_file = "FaultDetectionA_TEST.ts";
+    fs::path input_path;
+
+    if (fs::exists(dataset_file)) {
+        input_path = dataset_file;
+    } 
+    else if (fs::exists(fs::path("..") / "FaultDetectionA" / dataset_file)) {
+        input_path = fs::path("..") / "FaultDetectionA" / dataset_file;
+    }
+    else if (fs::exists(fs::path("..") / dataset_file)) {
+        input_path = fs::path("..") / dataset_file;
+    }
+    //string path = "C:\\Users\\jbrus\\Documents\\UNI\\MAGISTRALE\\PARALLEL\\PROGETTI\\MIDTERM_PATTERN_RECOGNITION\\FaultDetectionA\\FaultDetectionA_TEST.ts";
     // https://www.timeseriesclassification.com/dataset.php?train=&test=%3E1000&leng=&class=&type=
+    string path = input_path.string();
     std::random_device rd;
     std::mt19937 gen(rd());
     //const int NUM_QUERIES = 5;
     //const int QUERY_LENGTH = 100;
     vector<int> query_numbers = {5, 50, 100};
     vector<int> query_lengths = {100, 500, 1000, 3000};
-/*
+    /*
     vector<int> query_numbers = {5, 10};
     vector<int> query_lengths = {100};
-*/
+    */
 
     vector<string> raw_data_lines = loadRawDataset(path);
 
@@ -33,6 +48,8 @@ int main() {
     struct TimingPair{
         duration<double, milli> single_q;
         duration<double, milli> multi_q;
+        duration<double, milli> single_q_cuda;
+        duration<double, milli> multi_q_cuda;
     };
 
     // Matrici per i risultati [Lunghezza][NumeroQuery]
@@ -82,15 +99,38 @@ int main() {
             auto end_MultiSoA_search = high_resolution_clock::now();
             duration<double, milli> time_MultiSoA_search = end_MultiSoA_search - start_MultiSoA_search;
 
+            //----------------------------------------------------
+                //CUDA Search on SoA
+            cout << "CUDA Search on SoA..." << endl;
+            //----------------------------------------------------
+            // Time CUDA SingleSearch
+            auto start_CUDA_SingleSoA_search = high_resolution_clock::now();
+            vector<int> risultati_CUDA_SingleSoA = CUDASearch_SoA(datasetSoA, single_query);
+            auto end_CUDA_SingleSoA_search = high_resolution_clock::now();
+            duration<double, milli> time_CUDA_SingleSoA_search = end_CUDA_SingleSoA_search - start_CUDA_SingleSoA_search;
+            // Time CUDA MultiSearch
+            auto start_CUDA_MultiSoA_search = high_resolution_clock::now();
+            vector<vector<int>> risultati_CUDA_MultiSoA = CUDAMultiQuerySearch_SoA(datasetSoA, all_queries);
+            auto end_CUDA_MultiSoA_search = high_resolution_clock::now();
+            duration<double, milli> time_CUDA_MultiSoA_search = end_CUDA_MultiSoA_search - start_CUDA_MultiSoA_search;
+
+
             /// memorizzare dati nelle matrici
             matrixAoS[i][j].single_q = time_SingleAoS_search;
             matrixAoS[i][j].multi_q = time_MultiAoS_search;
 
             matrixSoA[i][j].single_q = time_SingleSoA_search;
             matrixSoA[i][j].multi_q = time_MultiSoA_search;
+
+            matrixSoA[i][j].single_q_cuda = time_CUDA_SingleSoA_search;
+            matrixSoA[i][j].multi_q_cuda = time_CUDA_MultiSoA_search;
+
         }   
     }
 
+
+
+    /*
     // trascrivo i dati in un file csv
     ofstream outFile("C:\\Users\\jbrus\\Documents\\UNI\\MAGISTRALE\\PARALLEL\\PROGETTI\\MIDTERM_PATTERN_RECOGNITION\\src\\Search_results.csv");
     outFile << "Format,QueryLength,NumQueries,Type,TimeMS\n";   
@@ -108,6 +148,36 @@ int main() {
     }
     outFile.close();
     cout << "Dati salvati in Search_results.csv" << endl;
+    */
 
+
+    fs::path output_dir = fs::path("..") / "src";
+    fs::path output_file = output_dir / "Search_results.csv";
+
+    // Crea la cartella 'src' se non esiste già (evita errori di apertura file)
+    if (!fs::exists(output_dir)) {
+        fs::create_directories(output_dir);
+    }
+
+    ofstream outFile(output_file.string());
+
+    if (!outFile.is_open()) {
+        cerr << " Errore nell'apertura del file CSV in: " << output_file.string() << endl;
+    } else {
+        outFile << "Format,QueryLength,NumQueries,Type,TimeMS\n";   
+
+        for (size_t i = 0; i < query_lengths.size(); ++i) {
+            for (size_t j = 0; j < query_numbers.size(); ++j) {
+                // Scriviamo i dati AoS
+                outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixAoS[i][j].single_q.count() << "\n";
+                outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixAoS[i][j].multi_q.count() << "\n";
+
+                // Scriviamo i dati SoA
+                outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q.count() << "\n";
+                outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q.count() << "\n";
+            }
+        }
+    outFile.close();
+    cout << "✅ Dati salvati con successo in: " << output_file.string() << endl;
     return 0;
 }
