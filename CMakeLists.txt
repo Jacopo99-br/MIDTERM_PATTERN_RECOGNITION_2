@@ -13,10 +13,10 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-set(CMAKE_CUDA_STANDARD 13)
+set(CMAKE_CUDA_STANDARD 14)
 set(CMAKE_CUDA_STANDARD_REQUIRED True)
 
-find_package(OpenMP REQUIRED)
+find_package(OpenMP COMPONENTS CXX REQUIRED)
 
 # Trova i nostri file sorgente
 # (Al momento solo main.cpp, ma potresti aggiungerne altri)

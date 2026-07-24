@@ -3,7 +3,7 @@
 #include <cmath>
 #include <cfloat>
 #include <cuda_runtime.h>
-#include "timeseriesCUDA.cuh"
+#include "timeSeriesCUDA.cuh"
 
 // -----------------------------------------------------------------------------
 // MEMORIA COSTANTE (Constant Memory)
@@ -85,25 +85,19 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
 std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset, 
                                const std::vector<double>& query) 
 {
-    int num_series = dataset.data.size();     // 2728
-    if (num_series == 0) return {};
-    
-    int series_len = dataset.data[0].size();  // 5120
-    int query_len = query.size();
-    int total_elements = num_series * series_len; // 13.967.360 double
+    int num_series = dataset.all_data.size();        // CORRETTO: usa 'all_data'
+    int series_len = dataset.serie_lenght;           // CORRETTO: usa 'serie_lenght'
+    int total_elements = num_series * series_len;
 
-    // -------------------------------------------------------------------------
-    // 1. TRASPOSIZIONE DATI (CPU -> True SoA)
-    // Riorganizziamo i dati in RAM: prima tutti i punti 0, poi tutti i punti 1, ecc.
-    // -------------------------------------------------------------------------
+// Nel ciclo di trasposizione (CPU -> True SoA):
+    /*
     std::vector<double> flat_data(total_elements);
     for (int s = 0; s < num_series; ++s) {
         for (int t = 0; t < series_len; ++t) {
-            // Formula di trasposizione: punto t x stride num_series + serie s
-            flat_data[t * num_series + s] = dataset.data[s][t];
+            flat_data[t * num_series + s] = dataset.all_data[s][t]; // CORRETTO
         }
     }
-
+    */
     // 2. Allocazione VRAM
     double* d_data = nullptr;
     int* d_results = nullptr;
@@ -112,7 +106,9 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
     CHECK_CUDA(cudaMalloc((void**)&d_results, num_series * sizeof(int)));
 
     // 3. Trasferimento dati da RAM a VRAM e Query in Constant Memory
-    CHECK_CUDA(cudaMemcpy(d_data, flat_data.data(), total_elements * sizeof(double), cudaMemcpyHostToDevice));
+    //CHECK_CUDA(cudaMemcpy(d_data, flat_data.data(), total_elements * sizeof(double), cudaMemcpyHostToDevice));
+    // Se all_data_flat è già trasposta in formato SoA:
+    CHECK_CUDA(cudaMemcpy(d_data, dataset.all_data_flat.data(), total_elements * sizeof(double), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpyToSymbol(d_const_query, query.data(), query_len * sizeof(double)));
 
     // 4. Configurazione Griglia/Blocchi (11 blocchi da 256 thread)
