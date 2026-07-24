@@ -179,5 +179,6 @@ int main() {
         }
     outFile.close();
     cout << "✅ Dati salvati con successo in: " << output_file.string() << endl;
+    }
     return 0;
 }
