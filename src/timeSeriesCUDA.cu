@@ -87,12 +87,13 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
 {
 
     int num_series = 0;
+    int series_len = dataset.serie_lenght;
     if (series_len > 0 && !dataset.all_data_flat.empty()) {
         num_series = dataset.all_data_flat.size() / series_len;
     } else if (!dataset.all_data.empty()) {
         num_series = dataset.all_data.size();
     }     
-    int series_len = dataset.serie_lenght;           // CORRETTO: usa 'serie_lenght'
+               // CORRETTO: usa 'serie_lenght'
     
     int query_len = query.size();
     int total_elements = num_series * series_len;
