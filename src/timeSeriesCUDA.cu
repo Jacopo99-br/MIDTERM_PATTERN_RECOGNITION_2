@@ -86,11 +86,16 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
                                const std::vector<double>& query) 
 {
 
-    int num_series = dataset.all_data.size();        // CORRETTO: usa 'all_data'
+    int num_series = 0;
+    if (series_len > 0 && !dataset.all_data_flat.empty()) {
+        num_series = dataset.all_data_flat.size() / series_len;
+    } else if (!dataset.all_data.empty()) {
+        num_series = dataset.all_data.size();
+    }     
     int series_len = dataset.serie_lenght;           // CORRETTO: usa 'serie_lenght'
-    int total_elements = num_series * series_len;
+    
     int query_len = query.size();
-
+    int total_elements = num_series * series_len;
 // Nel ciclo di trasposizione (CPU -> True SoA):
     /*
     std::vector<double> flat_data(total_elements);
@@ -101,6 +106,15 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
     }
     */
     // 2. Allocazione VRAM
+    std::cout << "[DEBUG FIX] num_series calcolato: " << num_series 
+              << " | series_len: " << series_len 
+              << " | query_len: " << query_len << std::endl;
+
+    if (num_series <= 0 || series_len <= 0 || query_len <= 0) {
+        std::cerr << "Errore: Dimensioni non valide per il lancio del Kernel CUDA!" << std::endl;
+        return {};
+    }
+
     double* d_data = nullptr;
     int* d_results = nullptr;
 
