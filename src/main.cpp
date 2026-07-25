@@ -33,7 +33,7 @@ int main() {
     //const int NUM_QUERIES = 5;
     //const int QUERY_LENGTH = 100;
     vector<int> query_numbers = {5, 50};
-    vector<int> query_lengths = {100, 500, 1000, 3000};
+    vector<int> query_lengths = {100, 500, 1000};
     /*
     vector<int> query_numbers = {5, 10};
     vector<int> query_lengths = {100};
