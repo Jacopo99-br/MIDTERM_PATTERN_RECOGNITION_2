@@ -32,7 +32,7 @@ int main() {
     std::mt19937 gen(rd());
     //const int NUM_QUERIES = 5;
     //const int QUERY_LENGTH = 100;
-    vector<int> query_numbers = {5, 50, 100};
+    vector<int> query_numbers = {5, 50};
     vector<int> query_lengths = {100, 500, 1000, 3000};
     /*
     vector<int> query_numbers = {5, 10};
@@ -70,7 +70,7 @@ int main() {
             cout << "Create " << all_queries.size() << " query of lenght: " << query_l << endl;
 
             vector<double> single_query = all_queries[0];
-
+        /*
             // Time AoS SingleSearch
             cout << "Parallel SingleSearch on AoS..." << endl;
             auto start_SingleAoS_search = high_resolution_clock::now();
@@ -98,7 +98,7 @@ int main() {
             vector<vector<int>> risultati_MultiSoA = MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
             auto end_MultiSoA_search = high_resolution_clock::now();
             duration<double, milli> time_MultiSoA_search = end_MultiSoA_search - start_MultiSoA_search;
-
+        */
             //----------------------------------------------------
                 //CUDA Search on SoA
             cout << "CUDA Search on SoA..." << endl;
@@ -116,11 +116,11 @@ int main() {
 
 
             /// memorizzare dati nelle matrici
-            matrixAoS[i][j].single_q = time_SingleAoS_search;
-            matrixAoS[i][j].multi_q = time_MultiAoS_search;
+           // matrixAoS[i][j].single_q = time_SingleAoS_search;
+           // matrixAoS[i][j].multi_q = time_MultiAoS_search;
 
-            matrixSoA[i][j].single_q = time_SingleSoA_search;
-            matrixSoA[i][j].multi_q = time_MultiSoA_search;
+           // matrixSoA[i][j].single_q = time_SingleSoA_search;
+           // matrixSoA[i][j].multi_q = time_MultiSoA_search;
 
             matrixSoA[i][j].single_q_cuda = time_CUDA_SingleSoA_search;
             matrixSoA[i][j].multi_q_cuda = time_CUDA_MultiSoA_search;
@@ -169,16 +169,20 @@ int main() {
         for (size_t i = 0; i < query_lengths.size(); ++i) {
             for (size_t j = 0; j < query_numbers.size(); ++j) {
                 // Scriviamo i dati AoS
-                outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixAoS[i][j].single_q.count() << "\n";
-                outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixAoS[i][j].multi_q.count() << "\n";
+               // outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixAoS[i][j].single_q.count() << "\n";
+               // outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixAoS[i][j].multi_q.count() << "\n";
 
                 // Scriviamo i dati SoA
-                outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q.count() << "\n";
-                outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q.count() << "\n";
+               // outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q.count() << "\n";
+               // outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q.count() << "\n";
+
+                // Scriviamo i dati SoA CUDA
+                outFile << "CUDA_SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q_cuda.count() << "\n";
+                outFile << "CUDA_SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q_cuda.count() << "\n";
             }
         }
     outFile.close();
-    cout << "✅ Dati salvati con successo in: " << output_file.string() << endl;
+    cout << " Dati salvati con successo in: " << output_file.string() << endl;
     }
     return 0;
 }
