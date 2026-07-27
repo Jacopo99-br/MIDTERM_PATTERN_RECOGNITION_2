@@ -20,10 +20,6 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
                                const std::vector<double>& query);
 
 
-std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset, 
-                                                       const std::vector<double>& single_query, 
-                                                       int num_series, 
-                                                       int series_length);
 
 
 std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset, 

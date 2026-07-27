@@ -156,23 +156,7 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
     return results;
 }
 */
-std::vector<int> CUDASearch_SoA_Optimized(
-    const double* d_data, 
-    int num_series, 
-    int series_len, 
-    const std::vector<double>& single_query) 
-{
-    // Riuso la funzione batch passandole la query dentro un vector di vector
-    auto batch_results = CUDAMultiQuerySearch_SoA_Optimized(
-        d_data, 
-        { single_query },
-        num_series, 
-        series_len        
-    );
-    
-    // Restituisco direttamente il vettore degli indici di questa unica query
-    return batch_results[0];
-}
+
 // =============================================================================
 // FUNZIONE HOST (CPU): Batch Multi-Query
 // =============================================================================

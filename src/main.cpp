@@ -117,13 +117,13 @@ int main() {
                 //CUDA Search on SoA
             cout << "CUDA Search on SoA..." << endl;
             //----------------------------------------------------
-
+            /*
             // Time CUDA SingleSearch
             auto start_CUDA_SingleSoA_search = high_resolution_clock::now();
             vector<vector<int>> risultati_CUDA_SingleSoA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, single_query, num_series, series_len);
             auto end_CUDA_SingleSoA_search = high_resolution_clock::now();
             duration<double, milli> time_CUDA_SingleSoA_search = end_CUDA_SingleSoA_search - start_CUDA_SingleSoA_search;
-      
+            */
             // Time CUDA MultiSearch
             auto start_CUDA_MultiSoA_search = high_resolution_clock::now();
             vector<vector<int>> risultati_CUDA_MultiSoA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len);
@@ -138,7 +138,7 @@ int main() {
            // matrixSoA[i][j].single_q = time_SingleSoA_search;
            // matrixSoA[i][j].multi_q = time_MultiSoA_search;
 
-            matrixSoA[i][j].single_q_cuda = time_CUDA_SingleSoA_search;
+            //matrixSoA[i][j].single_q_cuda = time_CUDA_SingleSoA_search;
             matrixSoA[i][j].multi_q_cuda = time_CUDA_MultiSoA_search;
 
         }   
@@ -193,7 +193,7 @@ int main() {
                // outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q.count() << "\n";
 
                 // Scriviamo i dati SoA CUDA
-                outFile << "CUDA_SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q_cuda.count() << "\n";
+                //outFile << "CUDA_SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q_cuda.count() << "\n";
                 outFile << "CUDA_SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q_cuda.count() << "\n";
             }
         }
