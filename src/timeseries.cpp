@@ -112,10 +112,10 @@ TimeSeries_SoA loadDatasetSoA(const vector<string>& rawDataset){
 
     size_t pos_first = rawDataset[0].find_last_of(delimiter); //lunghezza serie della prima riga per preallocare
     vector<double> first_serie = DataParse(rawDataset[0].substr(0, pos_first));
-    dataset.serie_lenght = first_serie.size();
+    dataset.serie_length = first_serie.size();
 
     //si può fare la pre-allocazione totale
-    dataset.all_data_flat.resize(series_size * dataset.serie_lenght); 
+    dataset.all_data_flat.resize(series_size * dataset.serie_length); 
     dataset.all_classes.resize(series_size);
     
     #pragma omp parallel for schedule(static) // Ogni thread scrive direttamente nella posizione corretta del vettore flat e classes, evitando così la necessità di un vettore di dataset parziali e della sezione critica
@@ -130,12 +130,12 @@ TimeSeries_SoA loadDatasetSoA(const vector<string>& rawDataset){
         vector<double> serie = DataParse(_line.substr(0, pos_delim));
 
         // Copia veloce nel vettore flat
-        size_t offset = i * dataset.serie_lenght;
+        size_t offset = i * dataset.serie_length;
         std::copy(serie.begin(), serie.end(), dataset.all_data_flat.begin() + offset); //sposta blocchi di dati. Begin punto di partenza, end punto fine sorgente + offset è il punto di partenza nel vettore flat
         // diventa per alcuni compilatori memcpy , sfrutta la larghezza di banda massima della memoria RAM
     }
 
-    cout<<"loaded "<<dataset.all_data_flat.size()/dataset.serie_lenght<<" time series (SoA) from file  "<<endl;
+    cout<<"loaded "<<dataset.all_data_flat.size()/dataset.serie_length<<" time series (SoA) from file  "<<endl;
     return dataset;
 }
 
@@ -180,7 +180,7 @@ vector<int> ParallelSearch_AoS(const vector<TimeSeries>& dataset, const vector<d
 
 vector<int> ParallelSearch_SoA(const TimeSeries_SoA& dataset, const vector<double>& query){
     int numDataRows = dataset.all_classes.size();
-    int L = dataset.serie_lenght;
+    int L = dataset.serie_length;
     vector<int> results(numDataRows);    //preallocazione per non dover usare critical
 
     #pragma omp parallel for 
@@ -212,7 +212,7 @@ vector<vector<int>> MultiQueryParallelSearch_AoS(const vector<TimeSeries>& datas
 vector<vector<int>> MultiQueryParallelSearch_SoA(const TimeSeries_SoA& dataset, const vector<vector<double>>& queries){
     int numQueries = queries.size();
     int numDataRows = dataset.all_classes.size();
-    int L = dataset.serie_lenght;
+    int L = dataset.serie_length;
     vector<vector<int>> all_results(numQueries, vector<int>(numDataRows));
 
     #pragma omp parallel for collapse(2)  // Parallelizza su entrambe le dimensioni --> ( num_query x num_righe )/num_thread 
@@ -233,7 +233,7 @@ std::vector<double> RandomQuery(const TimeSeries_SoA& dataset, size_t lunghezzaQ
         std::cerr << "ERROR: Dataset is empty." << std::endl;
         return {};
     }
-    if (lunghezzaQuery == 0 || lunghezzaQuery > dataset.serie_lenght) {
+    if (lunghezzaQuery == 0 || lunghezzaQuery > dataset.serie_length) {
         std::cerr << "ERROR: Query length invalid." << std::endl;
         return {};
     }
@@ -241,13 +241,13 @@ std::vector<double> RandomQuery(const TimeSeries_SoA& dataset, size_t lunghezzaQ
     size_t row = row_dist(gen);
     
     // 3. Calcoliamo l'indice di inizio massimo all'interno della riga scelta
-    size_t max_start = dataset.serie_lenght - lunghezzaQuery;
+    size_t max_start = dataset.serie_length - lunghezzaQuery;
     std::uniform_int_distribution<size_t> start_dist(0, max_start);
     size_t start_in_row = start_dist(gen);
 
     // 4. Calcoliamo l'offset globale nel vettore FLAT
     // L'inizio è: (indice_riga * lunghezza_riga) + punto_di_inizio_nella_riga
-    size_t global_start_index = (row * dataset.serie_lenght) + start_in_row;
+    size_t global_start_index = (row * dataset.serie_length) + start_in_row;
 
     // 5. Estraiamo la sottoserie usando gli iteratori del vettore piatto
     return std::vector<double>(

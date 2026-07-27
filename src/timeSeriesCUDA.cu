@@ -7,9 +7,9 @@
 
 
 double* uploadDatasetToGPU(const TimeSeries_SoA& dataset){
-    int series_len = dataset.serie_lenght;
+    int series_len = dataset.serie_length;
     int num_series = dataset.all_data_flat.size() / series_len;
-    site_t total_bytes = num_series * series_len * sizeof(double);
+    size_t total_bytes = num_series * series_len * sizeof(double);
     double* d_dataset = nullptr;
     CHECK_CUDA(cudaMalloc((void**)&d_dataset, total_bytes));
     CHECK_CUDA(cudaMemcpy(d_dataset, dataset.all_data_flat.data(), total_bytes, cudaMemcpyHostToDevice));
@@ -102,13 +102,13 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
 {
 
     int num_series = 0;
-    int series_len = dataset.serie_lenght;
+    int series_len = dataset.serie_length;
     if (series_len > 0 && !dataset.all_data_flat.empty()) {
         num_series = dataset.all_data_flat.size() / series_len;
     } else if (!dataset.all_data.empty()) {
         num_series = dataset.all_data.size();
     }     
-               // CORRETTO: usa 'serie_lenght'
+               // CORRETTO: usa 'serie_length'
     
     int query_len = query.size();
     int total_elements = num_series * series_len;
@@ -156,7 +156,23 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
     return results;
 }
 */
-
+std::vector<int> CUDASearch_SoA_Optimized(
+    const double* d_data, 
+    int num_series, 
+    int series_len, 
+    const std::vector<double>& single_query) 
+{
+    // Riuso la funzione batch passandole la query dentro un vector di vector
+    auto batch_results = CUDAMultiQuerySearch_SoA_Optimized(
+        d_data, 
+        { single_query },
+        num_series, 
+        series_len        
+    );
+    
+    // Restituisco direttamente il vettore degli indici di questa unica query
+    return batch_results[0];
+}
 // =============================================================================
 // FUNZIONE HOST (CPU): Batch Multi-Query
 // =============================================================================

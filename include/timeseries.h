@@ -11,7 +11,7 @@ struct TimeSeries_SoA{
     std::vector<std::vector<double>> all_data;
     std::vector<int> all_classes;
     std::vector<double> all_data_flat;
-    int serie_lenght;
+    int serie_length;
 };
 
 std::vector<std::string> loadRawDataset(const std::string& filename);

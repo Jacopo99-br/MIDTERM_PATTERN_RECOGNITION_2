@@ -43,7 +43,21 @@ int main() {
 
     vector<TimeSeries> datasetAoS = loadDatasetAoS(raw_data_lines);
     TimeSeries_SoA datasetSoA = loadDatasetSoA(raw_data_lines);
+
+    int num_series = 0;
+    int series_len = datasetSoA.serie_length;
+    if (series_len > 0 && !datasetSoA.all_data_flat.empty()) {
+        num_series = datasetSoA.all_data_flat.size() / series_len;
+    } else if (!datasetSoA.all_data.empty()) {
+        num_series = datasetSoA.all_data.size();
+    }
     cout << "Dataset loaded in both AoS and SoA formats." << endl;
+
+    cout << "\n[GPU] Allocazione e caricamento dataset in VRAM..." << endl;
+    
+    // d_dataset_gpu è un puntatore 'const double*' che risiede in VRAM
+    const double* d_dataset_gpu = uploadDatasetToGPU(datasetSoA);
+
 
     struct TimingPair{
         duration<double, milli> single_q;
@@ -103,14 +117,16 @@ int main() {
                 //CUDA Search on SoA
             cout << "CUDA Search on SoA..." << endl;
             //----------------------------------------------------
+
             // Time CUDA SingleSearch
             auto start_CUDA_SingleSoA_search = high_resolution_clock::now();
-            vector<int> risultati_CUDA_SingleSoA = CUDASearch_SoA(datasetSoA, single_query);
+            vector<vector<int>> risultati_CUDA_SingleSoA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, single_query, num_series, series_len);
             auto end_CUDA_SingleSoA_search = high_resolution_clock::now();
             duration<double, milli> time_CUDA_SingleSoA_search = end_CUDA_SingleSoA_search - start_CUDA_SingleSoA_search;
+      
             // Time CUDA MultiSearch
             auto start_CUDA_MultiSoA_search = high_resolution_clock::now();
-            vector<vector<int>> risultati_CUDA_MultiSoA = CUDAMultiQuerySearch_SoA(datasetSoA, all_queries);
+            vector<vector<int>> risultati_CUDA_MultiSoA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len);
             auto end_CUDA_MultiSoA_search = high_resolution_clock::now();
             duration<double, milli> time_CUDA_MultiSoA_search = end_CUDA_MultiSoA_search - start_CUDA_MultiSoA_search;
 
@@ -184,5 +200,9 @@ int main() {
     outFile.close();
     cout << " Dati salvati con successo in: " << output_file.string() << endl;
     }
+    cout << "\n[GPU] Rilascio memoria VRAM in corso..." << endl;
+    freeGPUMemory(const_cast<double*>(d_dataset_gpu));
+    cout << "[GPU] Memoria rilasciata con successo." << endl;
+
     return 0;
 }
