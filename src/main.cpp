@@ -12,6 +12,42 @@
 using namespace std;
 using namespace std::chrono;
 namespace fs = std::filesystem;
+
+bool validateResults(const std::vector<std::vector<int>>& cpu_results,
+                     const std::vector<std::vector<int>>& gpu_results,
+                     int num_queries,
+                     int num_series) 
+{
+    int errors = 0;
+    int total_elements = num_queries * num_series;
+
+    for (int q = 0; q <= num_queries; ++q) {
+        for (int s = 0; s < num_series; ++s) {
+            int cpu_idx = cpu_results[q][s];
+            int gpu_idx = gpu_results[q][s];
+
+            if (cpu_idx != gpu_idx) {
+                // Stampa i primi 10 errori riscontrati per il debugging
+                if (errors < 10) {
+                    std::cerr << "DISCREPANZA at Query [" << q << "], Serie [" << s << "]: "
+                              << "CPU = " << cpu_idx << " | GPU = " << gpu_idx << std::endl;
+                }
+                errors++;
+            }
+        }
+    }
+
+    if (errors == 0) {
+        std::cout << "VALIDAZIONE SUPERATA! Tutti i " << total_elements 
+                  << " risultati CUDA corrispondono esattamente a OpenMP." << std::endl;
+        return true;
+    } else {
+        double error_rate = (double)errors / total_elements * 100.0;
+        std::cerr << "VALIDAZIONE FALLITA: " << errors << " / " << total_elements 
+                  << " discrepanze trovate (" << error_rate << "%)." << std::endl;
+        return false;
+    }
+}
 int main() {
     fs::path dataset_file = "FaultDetectionA_TEST.ts";
     fs::path input_path;
@@ -84,7 +120,7 @@ int main() {
             cout << "Create " << all_queries.size() << " query of lenght: " << query_l << endl;
 
             vector<double> single_query = all_queries[0];
-        /*
+   
             // Time AoS SingleSearch
             cout << "Parallel SingleSearch on AoS..." << endl;
             auto start_SingleAoS_search = high_resolution_clock::now();
@@ -112,7 +148,6 @@ int main() {
             vector<vector<int>> risultati_MultiSoA = MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
             auto end_MultiSoA_search = high_resolution_clock::now();
             duration<double, milli> time_MultiSoA_search = end_MultiSoA_search - start_MultiSoA_search;
-        */
             //----------------------------------------------------
                 //CUDA Search on SoA
             cout << "CUDA Search on SoA..." << endl;
@@ -130,14 +165,16 @@ int main() {
             auto end_CUDA_MultiSoA_search = high_resolution_clock::now();
             duration<double, milli> time_CUDA_MultiSoA_search = end_CUDA_MultiSoA_search - start_CUDA_MultiSoA_search;
             /// memorizzare dati nelle matrici
-           // matrixAoS[i][j].single_q = time_SingleAoS_search;
-           // matrixAoS[i][j].multi_q = time_MultiAoS_search;
+           matrixAoS[i][j].single_q = time_SingleAoS_search;
+           matrixAoS[i][j].multi_q = time_MultiAoS_search;
 
-           // matrixSoA[i][j].single_q = time_SingleSoA_search;
-           // matrixSoA[i][j].multi_q = time_MultiSoA_search;
+           matrixSoA[i][j].single_q = time_SingleSoA_search;
+           matrixSoA[i][j].multi_q = time_MultiSoA_search;
 
-            //matrixSoA[i][j].single_q_cuda = time_CUDA_SingleSoA_search;
-            matrixSoA[i][j].multi_q_cuda = time_CUDA_MultiSoA_search;
+           //matrixSoA[i][j].single_q_cuda = time_CUDA_SingleSoA_search;
+           matrixSoA[i][j].multi_q_cuda = time_CUDA_MultiSoA_search;
+
+            bool is_correct = validateResults(risultati_MultiSoA, risultati_CUDA_MultiSoA, query_numbers[j], num_series);
 
         }   
     }
@@ -183,12 +220,12 @@ int main() {
         for (size_t i = 0; i < query_lengths.size(); ++i) {
             for (size_t j = 0; j < query_numbers.size(); ++j) {
                 // Scriviamo i dati AoS
-               // outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixAoS[i][j].single_q.count() << "\n";
-               // outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixAoS[i][j].multi_q.count() << "\n";
+                outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixAoS[i][j].single_q.count() << "\n";
+                outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixAoS[i][j].multi_q.count() << "\n";
 
                 // Scriviamo i dati SoA
-               // outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q.count() << "\n";
-               // outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q.count() << "\n";
+                outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q.count() << "\n";
+                outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q.count() << "\n";
 
                 // Scriviamo i dati SoA CUDA
                 //outFile << "CUDA_SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q_cuda.count() << "\n";
@@ -201,6 +238,8 @@ int main() {
     cout << "\n[GPU] Rilascio memoria VRAM in corso..." << endl;
     freeGPUMemory(const_cast<double*>(d_dataset_gpu));
     cout << "[GPU] Memoria rilasciata con successo." << endl;
+
+    
 
     return 0;
 }
