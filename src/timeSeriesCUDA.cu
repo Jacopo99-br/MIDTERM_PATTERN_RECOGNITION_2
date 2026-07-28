@@ -80,7 +80,7 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
     if (series_idx < num_series) {        
         extern __shared__ double s_mem[]; // Memoria condivisa per la query corrente
         double* s_series = s_mem;
-        double* s_query = &s_series[series_len];
+        //double* s_query = &s_series[series_len];
         
         // Copia della serie corrente dalla memoria globale alla memoria condivisa
         for (int t = threadIdx.x; t < series_len; t += blockDim.x) {
@@ -88,17 +88,17 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
         }
 
         // Copia della query corrente dalla memoria globale alla memoria condivisa
-        const int query_offset = query_idx * query_len;
-        for (int j = threadIdx.x; j < query_len; j += blockDim.x) {
-            s_query[j] = d_queries[query_offset + j];
-        }
+        //const int query_offset = query_idx * query_len;
+       // for (int j = threadIdx.x; j < query_len; j += blockDim.x) {
+            //s_query[j] = d_queries[query_offset + j];
+        //}
 
         __syncthreads(); // Sincronizzazione dei thread nel blocco
 
     // -------------------------------------------------------------------------
     // 2. CALCOLO SLIDING WINDOW (100% Shared Memory)
     // -------------------------------------------------------------------------
-
+        const int query_offset = query_idx * query_len;
         const int max_start = series_len - query_len;
         double min_distance = DBL_MAX;
         int best_match_idx = -1;
@@ -108,7 +108,7 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
 
             #pragma unroll 4
             for (int j = 0; j < query_len; ++j) {
-                double diff = s_series[i + j] - s_query[j];
+                double diff = s_series[i + j] - d_queries[query_offset + j];
                 distance += fabs(diff); // L1 distance
             }
             if (distance < min_distance) {
@@ -229,7 +229,7 @@ std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
     int threadsPerBlock = 128;
     dim3 blocksPerGrid(num_series, num_queries); // per definire dimensioni blocchi e grighlie di thread lungo X,Y,Z
 
-    size_t sharedMemBytes = (series_length + query_len) * sizeof(double) + threadsPerBlock * ( sizeof(double) + sizeof(int)); // Memoria condivisa per serie e query e risultati
+    size_t sharedMemBytes = series_length * sizeof(double) + threadsPerBlock * ( sizeof(double) + sizeof(int)); // Memoria condivisa per serie e query e risultati
     
     std::cout << "[CUDA] num_series calcolato: " << num_series 
               << " | series_len: " << series_length 
