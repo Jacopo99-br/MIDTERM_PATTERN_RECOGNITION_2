@@ -81,7 +81,8 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
         extern __shared__ double s_mem[]; // Memoria condivisa per la query corrente
         double* s_series = s_mem;
         //double* s_query = &s_series[series_len];
-        
+        double* s_red_dist = &s_series[series_len]; // Memoria condivisa per la riduzione della distanza minima
+        int* s_red_idx = (int*)&s_red_dist[blockDim.x];
         // Copia della serie corrente dalla memoria globale alla memoria condivisa
         for (int t = threadIdx.x; t < series_len; t += blockDim.x) {
             s_series[t] = d_data[t * num_series + series_idx]; // Accesso SoA
@@ -117,20 +118,15 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
             }
         }
 
-        ///// RIDUZIONE BLOCCO PER TROVARE IL MINIMO TRA I THREAD DEL BLOCCO
-        double* s_min_dist = s_series;
-        int* s_best_idx = (int*)&s_min_dist[blockDim.x]; // rimpiego di memoria
-        //
-
-        s_min_dist[threadIdx.x] = min_distance;;
-        s_best_idx[threadIdx.x] = best_match_idx;
+        s_red_dist[threadIdx.x] = min_distance;
+        s_red_idx[threadIdx.x] = best_match_idx;
         __syncthreads();
 
         for(int stride = blockDim.x /2 ; stride >0; stride /=2){ //RIDUZIONE VISTA ALBERO
             if(threadIdx.x < stride){
-                if(s_min_dist[threadIdx.x + stride] < s_min_dist[threadIdx.x]){
-                    s_min_dist[threadIdx.x] = s_min_dist[threadIdx.x + stride];
-                    s_best_idx[threadIdx.x] = s_best_idx[threadIdx.x + stride];
+                if(s_red_dist[threadIdx.x + stride] < s_red_dist[threadIdx.x]){
+                    s_red_dist[threadIdx.x] = s_red_dist[threadIdx.x + stride];
+                    s_red_idx[threadIdx.x] = s_red_idx[threadIdx.x + stride];
                 }
             }
             __syncthreads();
@@ -138,7 +134,7 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
 
         if(threadIdx.x == 0){
             int out_idx = query_idx * num_series + series_idx;
-            d_results[out_idx] = s_best_idx[0];
+            d_results[out_idx] = s_red_idx[0];
         }
     }
 }
@@ -239,6 +235,7 @@ std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
     search_kernel_SoA<<<blocksPerGrid, threadsPerBlock, sharedMemBytes>>>(d_dataset, d_queries, num_series, series_length, query_len, d_results);
 
     CHECK_CUDA(cudaGetLastError());
+    CHECK_CUDA(cudaDeviceSynchronize());
 
     std::vector<int>h_flat_results(num_queries * num_series);
     CHECK_CUDA(cudaMemcpy(h_flat_results.data(), d_results, results_bytes, cudaMemcpyDeviceToHost));
