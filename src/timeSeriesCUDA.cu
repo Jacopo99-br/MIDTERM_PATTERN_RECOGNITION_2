@@ -80,7 +80,7 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
     if (series_idx < num_series) {        
         extern __shared__ double s_mem[]; // Memoria condivisa per la query corrente
         double* s_series = s_mem;
-        double* s_query = &s_series[series_len]
+        double* s_query = &s_series[series_len];
         
         // Copia della serie corrente dalla memoria globale alla memoria condivisa
         for (int t = threadIdx.x; t < series_len; t += blockDim.x) {
@@ -227,7 +227,7 @@ std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
     CHECK_CUDA(cudaMalloc((void**)&d_results, results_bytes));
 
     int threadsPerBlock = 128;
-    dim3 blocksPerGrid = (num_series, num_queries); // per definire dimensioni blocchi e grighlie di thread lungo X,Y,Z
+    dim3 blocksPerGrid(num_series, num_queries); // per definire dimensioni blocchi e grighlie di thread lungo X,Y,Z
 
     size_t sharedMemBytes = (series_length + query_len) * sizeof(double) + threadsPerBlock * ( sizeof(double) + sizeof(int)); // Memoria condivisa per serie e query e risultati
     
