@@ -6,22 +6,6 @@
 #include "timeSeriesCUDA.cuh"
 
 
-double* uploadDatasetToGPU(const TimeSeries_SoA& dataset){
-    int series_len = dataset.serie_length;
-    int num_series = dataset.all_data_flat.size() / series_len;
-    size_t total_bytes = num_series * series_len * sizeof(double);
-    double* d_dataset = nullptr;
-    CHECK_CUDA(cudaMalloc((void**)&d_dataset, total_bytes));
-    CHECK_CUDA(cudaMemcpy(d_dataset, dataset.all_data_flat.data(), total_bytes, cudaMemcpyHostToDevice));
-
-    return d_dataset;
-}
-
-void freeGPUMemory(double* d_dataset) {
-    if (d_dataset) {
-        CHECK_CUDA(cudaFree(d_dataset));
-    }
-}
 
 // -----------------------------------------------------------------------------
 // MEMORIA COSTANTE (Constant Memory)
@@ -40,6 +24,23 @@ __constant__ double d_const_query[MAX_QUERY_LEN];
             exit(EXIT_FAILURE); \
         } \
     } while (0)
+
+double* uploadDatasetToGPU(const TimeSeries_SoA& dataset){
+    int series_len = dataset.serie_length;
+    int num_series = dataset.all_data_flat.size() / series_len;
+    size_t total_bytes = num_series * series_len * sizeof(double);
+    double* d_dataset = nullptr;
+    CHECK_CUDA(cudaMalloc((void**)&d_dataset, total_bytes));
+    CHECK_CUDA(cudaMemcpy(d_dataset, dataset.all_data_flat.data(), total_bytes, cudaMemcpyHostToDevice));
+
+    return d_dataset;
+}
+
+void freeGPUMemory(double* d_dataset) {
+    if (d_dataset) {
+        CHECK_CUDA(cudaFree(d_dataset));
+    }
+}
 
 
 // =============================================================================
@@ -65,14 +66,14 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
         // 3. CICLO ESTERNO: Scorre le finestre i (da 0 a 5120 - query_len)
         for (int i = 0; i <= max_start_idx; ++i) {
             double current_dist = 0.0;
+            const int base_idx = i * num_series + series_idx;
+            // pre calcolo dell'offset per la finestra corrente
 
-            // 4. CICLO INTERNO: Calcola la distanza con la query
+            // 4. CICLO INTERNO: Calcola la distanza con la query (SAD)
+            #pragma unroll 4 
             for (int j = 0; j < query_len; ++j) {
                 
-                // --- FORMULA TRUE SOA INTERLACCIATO ---
-                // Calcola il punto temporale globale t = i + j
-                // I punti di tutte le 2728 serie a quel tempo t sono memorizzati consecutivamente!
-                int memory_idx = (i + j) * num_series + series_idx;
+                int memory_idx = base_idx + j * num_series; // Calcola l'indice di memoria per la finestra corrente
                 
                 // Lettura coalescente dalla VRAM
                 double diff = d_data[memory_idx] - d_const_query[j];
@@ -184,16 +185,14 @@ std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
     
     for (int q = 0; q < num_queries; ++q){
 
-        // to constant memory
+        // query nella constant memory
         CHECK_CUDA(cudaMemcpyToSymbol(d_const_query, queries[q].data(), query_len * sizeof(double)));
-
+        // lancia il kernel per la query corrente
         search_kernel_SoA<<<blocksPerGrid, threadsPerBlock>>>(d_dataset, num_series, series_length, query_len, d_results);
-
+        //recupera i risultati
         CHECK_CUDA(cudaMemcpy(all_results[q].data(), d_results, num_series * sizeof(int), cudaMemcpyDeviceToHost));
-        
-        CHECK_CUDA(cudaGetLastError());
-        CHECK_CUDA(cudaDeviceSynchronize());
     }
+    CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaFree(d_results));
     return all_results;
 }
