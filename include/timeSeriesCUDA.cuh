@@ -13,8 +13,9 @@
 #define DATASET_SERIES_LEN 5120
 
 double* uploadDatasetToGPU(const TimeSeries_SoA& dataset);
+double* uploadQueriesToGPU(const std::vector<std::vector<double>>& queries);
 
-void freeGPUMemory(double* d_dataset);
+void freeGPUMemory(double* d_ptr);
 
 std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset, 
                                const std::vector<double>& query);

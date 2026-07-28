@@ -10,7 +10,7 @@
 // -----------------------------------------------------------------------------
 // MEMORIA COSTANTE (Constant Memory)
 // -----------------------------------------------------------------------------
-__constant__ double d_const_query[MAX_QUERY_LEN];
+//__constant__ double d_const_query[MAX_QUERY_LEN];
 
 // -----------------------------------------------------------------------------
 // MACRO PER IL CONTROLLO DEGLI ERRORI CUDA
@@ -29,6 +29,7 @@ double* uploadDatasetToGPU(const TimeSeries_SoA& dataset){
     int series_len = dataset.serie_length;
     int num_series = dataset.all_data_flat.size() / series_len;
     size_t total_bytes = num_series * series_len * sizeof(double);
+    
     double* d_dataset = nullptr;
     CHECK_CUDA(cudaMalloc((void**)&d_dataset, total_bytes));
     CHECK_CUDA(cudaMemcpy(d_dataset, dataset.all_data_flat.data(), total_bytes, cudaMemcpyHostToDevice));
@@ -36,59 +37,109 @@ double* uploadDatasetToGPU(const TimeSeries_SoA& dataset){
     return d_dataset;
 }
 
-void freeGPUMemory(double* d_dataset) {
-    if (d_dataset) {
-        CHECK_CUDA(cudaFree(d_dataset));
+double* uploadQueriesToGPU(const std::vector<std::vector<double>>& queries) {
+    int num_queries = queries.size();
+    int query_len = queries[0].size();
+    size_t total_bytes = num_queries * query_len * sizeof(double);
+
+    // Si appiattisce le query in un unico buffer continuo
+    std::vector<double> h_flat_queries(num_queries * query_len);
+    for (int q = 0; q < num_queries; ++q) {
+        for (int j = 0; j < query_len; ++j) {
+            h_flat_queries[q * query_len + j] = queries[q][j];
+        }
+    }
+
+    double* d_queries = nullptr;
+    CHECK_CUDA(cudaMalloc((void**)&d_queries, total_bytes));
+    CHECK_CUDA(cudaMemcpy(d_queries, h_flat_queries.data(), total_bytes, cudaMemcpyHostToDevice));
+
+    return d_queries;
+}
+
+void freeGPUMemory(double* d_ptr) {
+    if (d_ptr) {
+        CHECK_CUDA(cudaFree(d_ptr));
     }
 }
 
-
 // =============================================================================
-// KERNEL CUDA
+// KERNEL CUDA 2D
 // =============================================================================
 __global__ void search_kernel_SoA(const double* __restrict__ d_data, 
+                                  const double* __restrict__ d_queries, 
                                   int num_series, 
                                   int series_len, 
                                   int query_len, 
                                   int* d_results) 
 {
-    // 1. Calcola l'indice globale del thread (rappresenta l'ID della serie: 0..2727)
-    const int series_idx = blockIdx.x * blockDim.x + threadIdx.x; //var built-in nvcc
+    const int series_idx = blockIdx.x;
+    const int query_idx = blockIdx.y; // Indice della query corrente
 
     // 2. Controllo dei limiti per evitare accessi fuori matrice
     if (series_idx < num_series) {        
-        const int max_start_idx = series_len - query_len;
+        extern __shared__ double s_mem[]; // Memoria condivisa per la query corrente
+        double* s_series = s_mem;
+        double* s_query = &s_series[series_len]
         
-        // Registro locale per mantenere la distanza minima trovata
+        // Copia della serie corrente dalla memoria globale alla memoria condivisa
+        for (int t = threadIdx.x; t < series_len; t += blockDim.x) {
+            s_series[t] = d_data[t * num_series + series_idx]; // Accesso SoA
+        }
+
+        // Copia della query corrente dalla memoria globale alla memoria condivisa
+        const int query_offset = query_idx * query_len;
+        for (int j = threadIdx.x; j < query_len; j += blockDim.x) {
+            s_query[j] = d_queries[query_offset + j];
+        }
+
+        __syncthreads(); // Sincronizzazione dei thread nel blocco
+
+    // -------------------------------------------------------------------------
+    // 2. CALCOLO SLIDING WINDOW (100% Shared Memory)
+    // -------------------------------------------------------------------------
+
+        const int max_start = series_len - query_len;
         double min_distance = DBL_MAX;
         int best_match_idx = -1;
 
-        // 3. CICLO ESTERNO: Scorre le finestre i (da 0 a 5120 - query_len)
-        for (int i = 0; i <= max_start_idx; ++i) {
-            double current_dist = 0.0;
-            const int base_idx = i * num_series + series_idx;
-            // pre calcolo dell'offset per la finestra corrente
+        for (int i = threadIdx.x; i <= max_start; i += blockDim.x) {
+            double distance = 0.0;
 
-            // 4. CICLO INTERNO: Calcola la distanza con la query (SAD)
-            #pragma unroll 4 
+            #pragma unroll 4
             for (int j = 0; j < query_len; ++j) {
-                
-                int memory_idx = base_idx + j * num_series; // Calcola l'indice di memoria per la finestra corrente
-                
-                // Lettura coalescente dalla VRAM
-                double diff = d_data[memory_idx] - d_const_query[j];
-                current_dist += fabs(diff);
+                double diff = s_series[i + j] - s_query[j];
+                distance += fabs(diff); // L1 distance
             }
-
-            // Salva il miglior match
-            if (current_dist < min_distance) {
-                min_distance = current_dist;
+            if (distance < min_distance) {
+                min_distance = distance;
                 best_match_idx = i;
             }
         }
 
-        // Salva il risultato in VRAM
-        d_results[series_idx] = best_match_idx;
+        ///// RIDUZIONE BLOCCO PER TROVARE IL MINIMO TRA I THREAD DEL BLOCCO
+        double* s_min_dist = s_series;
+        int* s_best_idx = (int*)&s_min_dist[blockDim.x]; // rimpiego di memoria
+        //
+
+        s_min_dist[threadIdx.x] = min_distance;;
+        s_best_idx[threadIdx.x] = best_match_idx;
+        __syncthreads();
+
+        for(int stride = blockDim.x /2 ; stride >0; stride /=2){ //RIDUZIONE VISTA ALBERO
+            if(threadIdx.x < stride){
+                if(s_min_dist[threadIdx.x + stride] < s_min_dist[threadIdx.x]){
+                    s_min_dist[threadIdx.x] = s_min_dist[threadIdx.x + stride];
+                    s_best_idx[threadIdx.x] = s_best_idx[threadIdx.x + stride];
+                }
+            }
+            __syncthreads();
+        }
+
+        if(threadIdx.x == 0){
+            int out_idx = query_idx * num_series + series_idx;
+            d_results[out_idx] = s_best_idx[0];
+        }
     }
 }
 
@@ -168,31 +219,38 @@ std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
 {
     int num_queries = queries.size();
     int query_len = queries[0].size(); // Assuming all queries have the same length
-    std::vector<std::vector<int>> all_results(num_queries, std::vector<int>(num_series));
+    //std::vector<std::vector<int>> all_results(num_queries, std::vector<int>(num_series));
+    double* d_queries = uploadQueriesToGPU(queries);
 
     int* d_results = nullptr;
-    CHECK_CUDA(cudaMalloc((void**)&d_results, num_series * sizeof(int)));
+    size_t results_bytes = num_queries * num_series * sizeof(int);
+    CHECK_CUDA(cudaMalloc((void**)&d_results, results_bytes));
 
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (num_series + threadsPerBlock - 1) / threadsPerBlock;  //threadsPerBlock -1 , serve per arrotondare verso l'alto
-    // totale: 11 blocchi x 256 thread --> 2816 thread, ma ne servono solo 2728, quindi alcuni thread non faranno nulla
+    int threadsPerBlock = 128;
+    dim3 blocksPerGrid = (num_series, num_queries); // per definire dimensioni blocchi e grighlie di thread lungo X,Y,Z
 
+    size_t sharedMemBytes = (series_length + query_len) * sizeof(double) + threadsPerBlock * ( sizeof(double) + sizeof(int)); // Memoria condivisa per serie e query e risultati
     
     std::cout << "[CUDA] num_series calcolato: " << num_series 
               << " | series_len: " << series_length 
               << " | num_queries: " << num_queries 
               << " | query_len: " << query_len << std::endl;
     
-    for (int q = 0; q < num_queries; ++q){
+    search_kernel_SoA<<<blocksPerGrid, threadsPerBlock, sharedMemBytes>>>(d_dataset, d_queries, num_series, series_length, query_len, d_results);
 
-        // query nella constant memory
-        CHECK_CUDA(cudaMemcpyToSymbol(d_const_query, queries[q].data(), query_len * sizeof(double)));
-        // lancia il kernel per la query corrente
-        search_kernel_SoA<<<blocksPerGrid, threadsPerBlock>>>(d_dataset, num_series, series_length, query_len, d_results);
-        //recupera i risultati
-        CHECK_CUDA(cudaMemcpy(all_results[q].data(), d_results, num_series * sizeof(int), cudaMemcpyDeviceToHost));
-    }
     CHECK_CUDA(cudaGetLastError());
+
+    std::vector<int>h_flat_results(num_queries * num_series);
+    CHECK_CUDA(cudaMemcpy(h_flat_results.data(), d_results, results_bytes, cudaMemcpyDeviceToHost));
+
+    std::vector<std::vector<int>> all_results(num_queries, std::vector<int>(num_series));
+    for (int q = 0; q < num_queries; ++q) {
+        for (int s = 0; s < num_series; ++s) {
+            all_results[q][s] = h_flat_results[q * num_series + s];
+        }
+    }
+
+    CHECK_CUDA(cudaFree(d_queries));
     CHECK_CUDA(cudaFree(d_results));
     return all_results;
 }

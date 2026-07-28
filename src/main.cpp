@@ -129,8 +129,6 @@ int main() {
             vector<vector<int>> risultati_CUDA_MultiSoA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len);
             auto end_CUDA_MultiSoA_search = high_resolution_clock::now();
             duration<double, milli> time_CUDA_MultiSoA_search = end_CUDA_MultiSoA_search - start_CUDA_MultiSoA_search;
-
-
             /// memorizzare dati nelle matrici
            // matrixAoS[i][j].single_q = time_SingleAoS_search;
            // matrixAoS[i][j].multi_q = time_MultiAoS_search;
