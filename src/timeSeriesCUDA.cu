@@ -29,7 +29,7 @@ struct alignas(16) ReductionItem{
     double dist;
     int idx;
     // 4 byte di padding automatici inseriti dal compilatore per allineare la struttura a 16 byte
-}
+};
 
 double* uploadDatasetToGPU(const TimeSeries_SoA& dataset){
     int series_len = dataset.serie_length;
