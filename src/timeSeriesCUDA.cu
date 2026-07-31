@@ -25,6 +25,12 @@
         } \
     } while (0)
 
+struct alignas(16) ReductionItem{
+    double dist;
+    int idx;
+    // 4 byte di padding automatici inseriti dal compilatore per allineare la struttura a 16 byte
+}
+
 double* uploadDatasetToGPU(const TimeSeries_SoA& dataset){
     int series_len = dataset.serie_length;
     int num_series = dataset.all_data_flat.size() / series_len;
@@ -80,19 +86,16 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
     if (series_idx < num_series) {        
         extern __shared__ double s_mem[]; // Memoria condivisa per la query corrente
         double* s_series = s_mem;
-        //double* s_query = &s_series[series_len];
-        double* s_red_dist = &s_series[series_len]; // Memoria condivisa per la riduzione della distanza minima
-        int* s_red_idx = (int*)&s_red_dist[blockDim.x];
-        // Copia della serie corrente dalla memoria globale alla memoria condivisa
-        for (int t = threadIdx.x; t < series_len; t += blockDim.x) {
-            s_series[t] = d_data[t * num_series + series_idx]; // Accesso SoA
-        }
+        
+        size_t series_bytes = series_len * sizeof(double);
+        size_t aligned_offset_bytes = (series_bytes + 15) & ~15;
+        
+        ReductionItem* s_red = (ReductionItem*)(s_mem + aligned_offset_bytes / sizeof(double));
 
-        // Copia della query corrente dalla memoria globale alla memoria condivisa
-        //const int query_offset = query_idx * query_len;
-       // for (int j = threadIdx.x; j < query_len; j += blockDim.x) {
-            //s_query[j] = d_queries[query_offset + j];
-        //}
+        const int series_offset = series_idx * series_len;
+        for (int t = threadIdx.x; t < series_len; t += blockDim.x) {
+            s_series[t] = d_data[series_offset + t]; // Accesso SoA
+        }
 
         __syncthreads(); // Sincronizzazione dei thread nel blocco
 
@@ -118,15 +121,14 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
             }
         }
 
-        s_red_dist[threadIdx.x] = min_distance;
-        s_red_idx[threadIdx.x] = best_match_idx;
+        s_red[threadIdx.x].dist = min_distance;
+        s_red[threadIdx.x].idx = best_match_idx;
         __syncthreads();
 
         for(int stride = blockDim.x /2 ; stride >0; stride /=2){ //RIDUZIONE VISTA ALBERO
             if(threadIdx.x < stride){
-                if(s_red_dist[threadIdx.x + stride] < s_red_dist[threadIdx.x]){
-                    s_red_dist[threadIdx.x] = s_red_dist[threadIdx.x + stride];
-                    s_red_idx[threadIdx.x] = s_red_idx[threadIdx.x + stride];
+                if(s_red[threadIdx.x + stride].dist < s_red[threadIdx.x].dist){
+                    s_red[threadIdx.x] = s_red[threadIdx.x + stride];
                 }
             }
             __syncthreads();
@@ -134,7 +136,7 @@ __global__ void search_kernel_SoA(const double* __restrict__ d_data,
 
         if(threadIdx.x == 0){
             int out_idx = query_idx * num_series + series_idx;
-            d_results[out_idx] = s_red_idx[0];
+            d_results[out_idx] = s_red[0].idx;
         }
     }
 }
@@ -225,7 +227,9 @@ std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
     int threadsPerBlock = 128;
     dim3 blocksPerGrid(num_series, num_queries); // per definire dimensioni blocchi e grighlie di thread lungo X,Y,Z
 
-    size_t sharedMemBytes = series_length * sizeof(double) + threadsPerBlock * ( sizeof(double) + sizeof(int)); // Memoria condivisa per serie e query e risultati
+    size_t series_bytes = series_length * sizeof(double);
+    size_t pitched_series_bytes = (series_bytes + 15) & ~15; // Allineamento a 16 byte
+    size_t sharedMemBytes = pitched_series_bytes + (threadsPerBlock * sizeof(ReductionItem)); // Memoria condivisa per la serie + riduzione
     
     std::cout << "[CUDA] num_series calcolato: " << num_series 
               << " | series_len: " << series_length 
