@@ -21,6 +21,7 @@ bool validateResults(const std::vector<std::vector<int>>& cpu_results,
 {
     int errors = 0;
     int false_positives_ties = 0;
+    int exact_matches = 0; 
     int num_queries = queries.size();
     int num_series = dataset.all_classes.size();
     int series_len = dataset.serie_length;
@@ -35,6 +36,7 @@ bool validateResults(const std::vector<std::vector<int>>& cpu_results,
 
             // 1. Se gli indici sono uguali (o differiscono solo di 1-2 posizioni), è ok!
             if (std::abs(cpu_idx - gpu_idx) <= 2) {
+                exact_matches++;
                 continue;
             }
 
@@ -64,12 +66,16 @@ bool validateResults(const std::vector<std::vector<int>>& cpu_results,
         }
     }
 
+    int total_correct_gpu = exact_matches + false_positives_ties;
+
+    std::cout << "\n================ RESOCONTO VALIDAZIONE CUDA vs OpenMP ================" << std::endl;
+
     if (errors == 0) {
         std::cout << "VALIDAZIONE SUPERATA! Tutti i " << total_elements 
                   << " risultati producono distanze identiche." << std::endl;
         if (false_positives_ties > 0) {
             std::cout << "  ↳ (" << false_positives_ties 
-                      << " casi erano minimi equivalenti / parità di distanza accettati)." << std::endl;
+                      << " casi erano minimi equivalenti / parità di distanza accettati), con: " << exact_matches<< "  exact_matches" << std::endl;
         }
         return true;
     } else {
