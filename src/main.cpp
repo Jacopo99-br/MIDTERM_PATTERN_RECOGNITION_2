@@ -8,6 +8,7 @@
 #include <cmath>
 #include <numeric>
 #include <algorithm>
+#include <string>
 #include "timeseries.h"
 
 // Inclusione condizionale: attivata solo se compilato con supporto CUDA (es. CMake su Colab)
@@ -139,15 +140,39 @@ bool validateResults(const std::vector<std::vector<int>>& cpu_results,
     }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    // --- 0. PARSING ARGOMENTI DA RIGA DI COMANDO ---
+    bool run_cpu = true;
+    bool force_gpu_only = false;
+    bool force_cpu_only = false;
+
+    for (int i = 1; i < argc; ++i) {
+        string arg = argv[i];
+        if (arg == "--gpu-only") {
+            force_gpu_only = true;
+        } else if (arg == "--cpu-only") {
+            force_cpu_only = true;
+        }
+    }
+
+    if (force_gpu_only) {
+        run_cpu = false;
+    }
+
     // --- 1. IDENTIFICAZIONE HARDWARE ---
     int num_cores = omp_get_num_procs();
     cout << "======================================================\n";
     cout << "[HW DETECT] Thread logici CPU disponibili: " << num_cores << endl;
     
     bool run_gpu = isGpuAvailable();
+    if (force_cpu_only) {
+        run_gpu = false;
+    }
+
     if (!run_gpu) {
         cout << "[HW DETECT] Esecuzione configurata SOLO SU CPU (OpenMP)." << endl;
+    } else if (force_gpu_only) {
+        cout << "[HW DETECT] Modalita' GPU-ONLY attiva (Benchmark CPU OpenMP saltato)." << endl;
     }
     cout << "======================================================\n";
 
@@ -156,13 +181,10 @@ int main() {
     fs::path input_path;
 
     if (fs::exists(fs::path("FaultDetectionA") / dataset_file)) {
-        // Se lanciato dalla radice del progetto (MIDTERM_PATTERN_RECOGNITION)
         input_path = fs::path("FaultDetectionA") / dataset_file;
     } else if (fs::exists(dataset_file)) {
-        // Se lanciato direttamente dentro FaultDetectionA
         input_path = dataset_file;
     } else if (fs::exists(fs::path("..") / "FaultDetectionA" / dataset_file)) {
-        // Se lanciato dall'interno della cartella build/
         input_path = fs::path("..") / "FaultDetectionA" / dataset_file;
     } else {
         std::cerr << "ERRORE: File dataset non trovato in FaultDetectionA/" << dataset_file.string() << std::endl;
@@ -170,19 +192,17 @@ int main() {
         return 1;
     }
     string path = input_path.string();
-    mt19937 gen(1337); // Seed fisso per generare identiche query tra esecuzioni diverse
+    mt19937 gen(1337);
 
     // Parametri sperimentali
     vector<int> query_numbers = {5, 50};
-    //vector<int> query_numbers = {5, 10};
     vector<int> query_lengths = {100, 500, 1000};
-    //vector<int> query_lengths = {10, 50, 60};
     vector<int> thread_counts = getThreadCountsToTest();
 
-    const int WARMUP_RUNS = 1; // Scarto cold-cache
-    const int NUM_RUNS = 5;    // Ripetizioni per media/stddev
+    const int WARMUP_RUNS = 1;
+    const int NUM_RUNS = 5;
 
-    // --- 3. CARICAMENTO E PREPARAZIONE DATI (Escluso dai timer) ---
+    // --- 3. CARICAMENTO E PREPARAZIONE DATI ---
     cout << "Caricamento dataset: " << path << endl;
     vector<string> raw_data_lines = loadRawDataset(path);
     vector<TimeSeries> datasetAoS = loadDatasetAoS(raw_data_lines);
@@ -201,17 +221,23 @@ int main() {
     }
 #endif
 
-    // --- 4. PREPARAZIONE FILE CSV ---
+    // --- 4. PREPARAZIONE FILE CSV (Modalità append per preservare i dati precedenti) ---
     fs::path output_dir = fs::path("src");
     if (!fs::exists(output_dir)) {
         fs::create_directories(output_dir);
     }
-    ofstream outFile((output_dir / "Search_results.csv").string());
+    fs::path csv_path = output_dir / "Search_results.csv";
+    bool file_exists = fs::exists(csv_path);
+
+    ofstream outFile(csv_path.string(), ios::out | ios::app);
     if (!outFile.is_open()) {
         cerr << "Impossibile creare Search_results.csv in " << output_dir.string() << endl;
         return 1;
     }
-    outFile << "Platform,Format,QueryLength,NumQueries,Threads,Mean_MS,StdDev_MS,Min_MS,Max_MS\n";
+    if (!file_exists || fs::file_size(csv_path) == 0) {
+        outFile << "Platform,Format,QueryLength,NumQueries,Threads,Mean_MS,StdDev_MS,Min_MS,Max_MS\n";
+        outFile.flush();
+    }
 
     // --- 5. BENCHMARKING SU PARAMETRI ---
     for (int query_l : query_lengths) {
@@ -226,47 +252,49 @@ int main() {
                 all_queries.push_back(RandomQuery(datasetSoA, query_l, gen));
             }
 
-            // Benchmark CPU: esplorazione thread (1 = baseline sequenziale per speedup)
-            for (int t : thread_counts) {
-                omp_set_num_threads(t);
-                cout << "  -> OpenMP [Threads: " << t << "]..." << endl;
+            // Benchmark CPU OpenMP (eseguito solo se NON è specificato --gpu-only)
+            if (run_cpu) {
+                for (int t : thread_counts) {
+                    omp_set_num_threads(t);
+                    cout << "  -> OpenMP [Threads: " << t << "]..." << endl;
 
-                // Test AoS
-                for (int w = 0; w < WARMUP_RUNS; ++w) {
-                    MultiQueryParallelSearch_AoS(datasetAoS, all_queries);
-                }
-                vector<double> times_AoS;
-                for (int r = 0; r < NUM_RUNS; ++r) {
-                    auto start = high_resolution_clock::now();
-                    MultiQueryParallelSearch_AoS(datasetAoS, all_queries);
-                    auto end = high_resolution_clock::now();
-                    times_AoS.push_back(duration<double, milli>(end - start).count());
-                }
-                BenchmarkStats s_aos = computeStats(times_AoS);
-                outFile << "OpenMP,AoS," << query_l << "," << query_n << "," << t << ","
-                        << s_aos.mean_ms << "," << s_aos.stddev_ms << "," 
-                        << s_aos.min_ms << "," << s_aos.max_ms << "\n";
+                    // Test AoS
+                    for (int w = 0; w < WARMUP_RUNS; ++w) {
+                        MultiQueryParallelSearch_AoS(datasetAoS, all_queries);
+                    }
+                    vector<double> times_AoS;
+                    for (int r = 0; r < NUM_RUNS; ++r) {
+                        auto start = high_resolution_clock::now();
+                        MultiQueryParallelSearch_AoS(datasetAoS, all_queries);
+                        auto end = high_resolution_clock::now();
+                        times_AoS.push_back(duration<double, milli>(end - start).count());
+                    }
+                    BenchmarkStats s_aos = computeStats(times_AoS);
+                    outFile << "OpenMP,AoS," << query_l << "," << query_n << "," << t << ","
+                            << s_aos.mean_ms << "," << s_aos.stddev_ms << "," 
+                            << s_aos.min_ms << "," << s_aos.max_ms << "\n";
 
-                // Test SoA
-                for (int w = 0; w < WARMUP_RUNS; ++w) {
-                    MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
-                }
-                vector<double> times_SoA;
-                for (int r = 0; r < NUM_RUNS; ++r) {
-                    auto start = high_resolution_clock::now();
-                    MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
-                    auto end = high_resolution_clock::now();
-                    times_SoA.push_back(duration<double, milli>(end - start).count());
-                }
-                BenchmarkStats s_soa = computeStats(times_SoA);
-                outFile << "OpenMP,SoA," << query_l << "," << query_n << "," << t << ","
-                        << s_soa.mean_ms << "," << s_soa.stddev_ms << "," 
-                        << s_soa.min_ms << "," << s_soa.max_ms << "\n";
+                    // Test SoA
+                    for (int w = 0; w < WARMUP_RUNS; ++w) {
+                        MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
+                    }
+                    vector<double> times_SoA;
+                    for (int r = 0; r < NUM_RUNS; ++r) {
+                        auto start = high_resolution_clock::now();
+                        MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
+                        auto end = high_resolution_clock::now();
+                        times_SoA.push_back(duration<double, milli>(end - start).count());
+                    }
+                    BenchmarkStats s_soa = computeStats(times_SoA);
+                    outFile << "OpenMP,SoA," << query_l << "," << query_n << "," << t << ","
+                            << s_soa.mean_ms << "," << s_soa.stddev_ms << "," 
+                            << s_soa.min_ms << "," << s_soa.max_ms << "\n";
 
-                outFile.flush();
+                    outFile.flush();
+                }
             }
 
-            // Benchmark GPU: eseguito solo se compilato con CUDA e se una scheda NVIDIA è presente
+            // Benchmark GPU CUDA
 #if HAS_CUDA
             if (run_gpu) {
                 cout << "  -> GPU CUDA Benchmark..." << endl;

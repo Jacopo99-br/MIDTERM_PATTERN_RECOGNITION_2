@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.18)
 
 # Nome del progetto
-project(PRALLEL_PRJCT VERSION 1.0 LANGUAGES CXX)
+project(PRALLEL_PRJCT LANGUAGES CXX)
 
 #se non si specifica il tipo di build imposta 'release'. Attiva l'ottimizzazione -03
 if(NOT CMAKE_BUILD_TYPE)
@@ -24,6 +24,10 @@ if(CMAKE_CUDA_COMPILER)
     set(CMAKE_CUDA_STANDARD 17)
     set(CMAKE_CUDA_STANDARD_REQUIRED True)
 
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES 75) # Default per Turing (T4 / GTX 1650)
+    endif()
+
     message(STATUS "[CUDA DETECTED] Abilitato supporto GPU CUDA.")
 
     # Includiamo tutti i sorgenti, compreso il file .cu
@@ -40,11 +44,8 @@ if(CMAKE_CUDA_COMPILER)
     target_compile_options(Project_TSPR PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler -fopenmp>)
 
     # Architettura: 75 per Tesla T4 (Colab), native se compili su una macchina con GPU locale
-    if(DEFINED ENV{COLAB_GPU} OR NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-        set_property(TARGET Project_TSPR PROPERTY CUDA_ARCHITECTURES 75)
-    else()
-        set_property(TARGET Project_TSPR PROPERTY CUDA_ARCHITECTURES native)
-    endif()
+    find_package(CUDAToolkit REQUIRED)
+    target_link_libraries(Project_TSPR PUBLIC CUDA::cudart)
 else()
     # --- RAMO 2: SOLO CPU (es. PC Locale senza GPU NVIDIA) ---
     message(STATUS "[NO CUDA] Nessun compilatore CUDA trovato. Compilazione SOLO CPU (OpenMP).")

@@ -8,9 +8,11 @@ unzip dataset.zip -d FaultDetectionA && rm dataset.zip
 apt-get update && apt-get install -y libomp-dev libgomp1
 
 mkdir -p build && cd build
-cmake ..
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=75 /content/MIDTERM_PATTERN_RECOGNITION_2
 make -j$(nproc)
-./Project_TSPR
+./Project_TSPR     (se ha entrambi disponibili)
+./Project_TSPR --gpu-only (colab)
+.\Project_TSPR.exe --cpu-only
 
 
 
