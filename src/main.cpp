@@ -1,18 +1,84 @@
 #include <iostream>
 #include <vector>
-//#include "timeseries.h" 
 #include <omp.h>
 #include <chrono>
 #include <random>
 #include <fstream>
 #include <filesystem>
-#include <cstdlib> // per system()
-#include <timeSeriesCUDA.cuh>
+#include <cmath>
+#include <numeric>
+#include <algorithm>
+#include "timeseries.h"
+
+// Inclusione condizionale: attivata solo se compilato con supporto CUDA (es. CMake su Colab)
+#if defined(USE_CUDA) || defined(__CUDACC__)
+    #include <cuda_runtime.h>
+    #include "timeSeriesCUDA.cuh"
+    #define HAS_CUDA 1
+#else
+    #define HAS_CUDA 0
+#endif
 
 using namespace std;
 using namespace std::chrono;
 namespace fs = std::filesystem;
 
+// Struttura per memorizzare le metriche statistiche raccomandate
+struct BenchmarkStats {
+    double mean_ms;
+    double stddev_ms;
+    double min_ms;
+    double max_ms;
+};
+
+// Calcolo di media, deviazione standard campionaria, minimo e massimo
+BenchmarkStats computeStats(const vector<double>& times_ms) {
+    if (times_ms.empty()) return {0.0, 0.0, 0.0, 0.0};
+    
+    double sum = std::accumulate(times_ms.begin(), times_ms.end(), 0.0);
+    double mean = sum / times_ms.size();
+
+    double accum = 0.0;
+    for (double t : times_ms) {
+        accum += (t - mean) * (t - mean);
+    }
+    double variance = (times_ms.size() > 1) ? (accum / (times_ms.size() - 1)) : 0.0;
+    double stddev = std::sqrt(variance);
+
+    auto [min_it, max_it] = std::minmax_element(times_ms.begin(), times_ms.end());
+    return {mean, stddev, *min_it, *max_it};
+}
+
+// Verifica la disponibilità runtime di una GPU senza terminare l'applicazione in caso di assenza
+bool isGpuAvailable() {
+#if HAS_CUDA
+    int device_count = 0;
+    cudaError_t err = cudaGetDeviceCount(&device_count);
+    if (err == cudaSuccess && device_count > 0) {
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, 0);
+        cout << "[HW DETECT] GPU Rilevata: " << prop.name << " (" << prop.multiProcessorCount << " SMs)" << endl;
+        return true;
+    }
+    cudaGetLastError(); // Reset dell'eventuale flag di errore del driver
+#endif
+    return false;
+}
+
+// Genera la lista dei thread da esplorare (es. 1, 2, 4, 8, ... fino al massimo di sistema)
+vector<int> getThreadCountsToTest() {
+    int max_threads = omp_get_num_procs();
+    vector<int> counts;
+    for (int t = 1; t <= max_threads; t *= 2) {
+        counts.push_back(t);
+    }
+    if (counts.empty() || counts.back() != max_threads) {
+        counts.push_back(max_threads);
+    }
+    return counts;
+}
+
+// Funzione di validazione con gestione delle parità di minima distanza (minimi equivalenti)
 bool validateResults(const std::vector<std::vector<int>>& cpu_results,
                      const std::vector<std::vector<int>>& gpu_results,
                      const TimeSeries_SoA& dataset,
@@ -34,15 +100,12 @@ bool validateResults(const std::vector<std::vector<int>>& cpu_results,
             int cpu_idx = cpu_results[q][s];
             int gpu_idx = gpu_results[q][s];
 
-            // 1. Se gli indici sono uguali (o differiscono solo di 1-2 posizioni), è ok!
             if (std::abs(cpu_idx - gpu_idx) <= 2) {
                 exact_matches++;
                 continue;
             }
 
-            // 2. Se gli indici sono diversi, verifichiamo la distanza SAD REALE delle due finestre
             const double* series_ptr = &dataset.all_data_flat[s * series_len];
-            
             double cpu_sad = 0.0;
             double gpu_sad = 0.0;
 
@@ -51,236 +114,199 @@ bool validateResults(const std::vector<std::vector<int>>& cpu_results,
                 gpu_sad += std::abs(series_ptr[gpu_idx + j] - queries[q][j]);
             }
 
-            // 3. CHECK CON TOLLERANZA SULLA DISTANZA
-            // Se le due distanze sono essenzialmente identiche, la GPU ha trovato un minimo equivalente!
             if (std::abs(cpu_sad - gpu_sad) <= tolerance) {
-                false_positives_ties++; // È solo un pareggio di minima distanza tra due punti diversi
+                false_positives_ties++;
             } else {
                 if (errors < 5) {
-                    std::cerr << "DISCREPANZA REALE alla Query [" << q << "], Serie [" << s << "]: "
-                              << "CPU_idx = " << cpu_idx << " (SAD: " << cpu_sad << ") | "
-                              << "GPU_idx = " << gpu_idx << " (SAD: " << gpu_sad << ")" << std::endl;
+                    std::cerr << "  DISCREPANZA REALE Query [" << q << "], Serie [" << s << "]: "
+                              << "CPU_idx=" << cpu_idx << " (SAD: " << cpu_sad << ") | "
+                              << "GPU_idx=" << gpu_idx << " (SAD: " << gpu_sad << ")" << std::endl;
                 }
                 errors++;
             }
         }
     }
 
-    int total_correct_gpu = exact_matches + false_positives_ties;
-
-    std::cout << "\n================ RESOCONTO VALIDAZIONE CUDA vs OpenMP ================" << std::endl;
-
     if (errors == 0) {
-        std::cout << "VALIDAZIONE SUPERATA! Tutti i " << total_elements 
-                  << " risultati producono distanze identiche." << std::endl;
-        if (false_positives_ties > 0) {
-            std::cout << "  ↳ (" << false_positives_ties 
-                      << " casi erano minimi equivalenti / parità di distanza accettati), con: " << exact_matches<< "  exact_matches" << std::endl;
-        }
+        std::cout << "  [Validazione] SUPERATA (" << exact_matches << " exact matches, " 
+                  << false_positives_ties << " minimi equivalenti su " << total_elements << ")" << std::endl;
         return true;
     } else {
         double error_rate = (double)errors / total_elements * 100.0;
-        std::cerr << "VALIDAZIONE FALLITA: " << errors << " / " << total_elements 
-                  << " discrepanze reali trovate (" << error_rate << "%)." << std::endl;
+        std::cerr << "  [Validazione] FALLITA: " << errors << " / " << total_elements 
+                  << " discrepanze (" << error_rate << "%)." << std::endl;
         return false;
     }
 }
+
 int main() {
+    // --- 1. IDENTIFICAZIONE HARDWARE ---
+    int num_cores = omp_get_num_procs();
+    cout << "======================================================\n";
+    cout << "[HW DETECT] Thread logici CPU disponibili: " << num_cores << endl;
+    
+    bool run_gpu = isGpuAvailable();
+    if (!run_gpu) {
+        cout << "[HW DETECT] Esecuzione configurata SOLO SU CPU (OpenMP)." << endl;
+    }
+    cout << "======================================================\n";
+
+    // --- 2. LOCALIZZAZIONE DATASET ---
     fs::path dataset_file = "FaultDetectionA_TEST.ts";
     fs::path input_path;
 
-    if (fs::exists(dataset_file)) {
+    if (fs::exists(fs::path("FaultDetectionA") / dataset_file)) {
+        // Se lanciato dalla radice del progetto (MIDTERM_PATTERN_RECOGNITION)
+        input_path = fs::path("FaultDetectionA") / dataset_file;
+    } else if (fs::exists(dataset_file)) {
+        // Se lanciato direttamente dentro FaultDetectionA
         input_path = dataset_file;
-    } 
-    else if (fs::exists(fs::path("..") / "FaultDetectionA" / dataset_file)) {
+    } else if (fs::exists(fs::path("..") / "FaultDetectionA" / dataset_file)) {
+        // Se lanciato dall'interno della cartella build/
         input_path = fs::path("..") / "FaultDetectionA" / dataset_file;
+    } else {
+        std::cerr << "ERRORE: File dataset non trovato in FaultDetectionA/" << dataset_file.string() << std::endl;
+        std::cerr << "Cartella corrente: " << fs::current_path().string() << std::endl;
+        return 1;
     }
-    else if (fs::exists(fs::path("..") / dataset_file)) {
-        input_path = fs::path("..") / dataset_file;
-    }
-    //string path = "C:\\Users\\jbrus\\Documents\\UNI\\MAGISTRALE\\PARALLEL\\PROGETTI\\MIDTERM_PATTERN_RECOGNITION\\FaultDetectionA\\FaultDetectionA_TEST.ts";
-    // https://www.timeseriesclassification.com/dataset.php?train=&test=%3E1000&leng=&class=&type=
     string path = input_path.string();
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    //const int NUM_QUERIES = 5;
-    //const int QUERY_LENGTH = 100;
+    mt19937 gen(1337); // Seed fisso per generare identiche query tra esecuzioni diverse
+
+    // Parametri sperimentali
     vector<int> query_numbers = {5, 50};
+    //vector<int> query_numbers = {5, 10};
     vector<int> query_lengths = {100, 500, 1000};
-    /*
-    vector<int> query_numbers = {5, 10};
-    vector<int> query_lengths = {100};
-    */
+    //vector<int> query_lengths = {10, 50, 60};
+    vector<int> thread_counts = getThreadCountsToTest();
 
+    const int WARMUP_RUNS = 1; // Scarto cold-cache
+    const int NUM_RUNS = 5;    // Ripetizioni per media/stddev
+
+    // --- 3. CARICAMENTO E PREPARAZIONE DATI (Escluso dai timer) ---
+    cout << "Caricamento dataset: " << path << endl;
     vector<string> raw_data_lines = loadRawDataset(path);
-
     vector<TimeSeries> datasetAoS = loadDatasetAoS(raw_data_lines);
     TimeSeries_SoA datasetSoA = loadDatasetSoA(raw_data_lines);
 
-    int num_series = 0;
     int series_len = datasetSoA.serie_length;
-    if (series_len > 0 && !datasetSoA.all_data_flat.empty()) {
-        num_series = datasetSoA.all_data_flat.size() / series_len;
-    } else if (!datasetSoA.all_data.empty()) {
-        num_series = datasetSoA.all_data.size();
+    int num_series = datasetSoA.all_data_flat.size() / series_len;
+    cout << "Dataset pronto: " << num_series << " serie da " << series_len << " campioni ciascuna." << endl;
+
+    // Caricamento GPU (se attiva)
+    const double* d_dataset_gpu = nullptr;
+#if HAS_CUDA
+    if (run_gpu) {
+        cout << "[GPU] Caricamento dataset nella VRAM..." << endl;
+        d_dataset_gpu = uploadDatasetToGPU(datasetSoA);
     }
-    cout << "Dataset loaded in both AoS and SoA formats." << endl;
+#endif
 
-    cout << "\n[GPU] Allocazione e caricamento dataset in VRAM..." << endl;
-    
-    // d_dataset_gpu è un puntatore 'const double*' che risiede in VRAM
-    const double* d_dataset_gpu = uploadDatasetToGPU(datasetSoA);
-
-
-    struct TimingPair{
-        duration<double, milli> single_q;
-        duration<double, milli> multi_q;
-        duration<double, milli> single_q_cuda;
-        duration<double, milli> multi_q_cuda;
-    };
-
-    // Matrici per i risultati [Lunghezza][NumeroQuery]
-    vector<vector<TimingPair>> matrixAoS(query_lengths.size(), vector<TimingPair>(query_numbers.size()));
-    vector<vector<TimingPair>> matrixSoA(query_lengths.size(), vector<TimingPair>(query_numbers.size()));
-
-    for (size_t i = 0; i < query_lengths.size(); ++i){
-        int query_l = query_lengths[i];
-
-        for (size_t j = 0; j < query_numbers.size(); ++j){
-            int query_n = query_numbers[j];
-            cout << "Query length: " << query_l << ", Number of queries: " << query_n << endl;
-
-            vector<vector<double>> all_queries;  // Query generate randomiche basate sui dati del dataset
-            for(int i = 0; i < query_n; ++i) {
-                all_queries.push_back(RandomQuery(datasetSoA, query_l, gen));
-            }
-            cout << "Create " << all_queries.size() << " query of lenght: " << query_l << endl;
-
-            vector<double> single_query = all_queries[0];
-   
-            // Time AoS SingleSearch
-            cout << "Parallel SingleSearch on AoS..." << endl;
-            auto start_SingleAoS_search = high_resolution_clock::now();
-            vector<int> risultati_SingleAoS = ParallelSearch_AoS(datasetAoS, single_query);
-            auto end_SingleAoS_search = high_resolution_clock::now();
-            duration<double, milli> time_SingleAoS_search = end_SingleAoS_search - start_SingleAoS_search;
-            
-            // Time SoA SingleSearch
-            cout << "Parallel SingleSearch on SoA..." << endl;
-            auto start_SingleSoA_search = high_resolution_clock::now();
-            vector<int> risultati_SingleSoA = ParallelSearch_SoA(datasetSoA, single_query);
-            auto end_SingleSoA_search = high_resolution_clock::now();
-            duration<double, milli> time_SingleSoA_search = end_SingleSoA_search - start_SingleSoA_search;
-
-            // Time AoS MultiSearch
-            cout << "Parallel MultiSearch on AoS..." << endl;
-            auto start_MultiAoS_search = high_resolution_clock::now();
-            vector<vector<int>> risultati_MultiAoS = MultiQueryParallelSearch_AoS(datasetAoS, all_queries);
-            auto end_MultiAoS_search = high_resolution_clock::now();
-            duration<double, milli> time_MultiAoS_search = end_MultiAoS_search - start_MultiAoS_search;
-            
-            // Time SoA MultiSearch
-            cout << "Parallel MultiSearch on SoA..." << endl;
-            auto start_MultiSoA_search = high_resolution_clock::now();
-            vector<vector<int>> risultati_MultiSoA = MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
-            auto end_MultiSoA_search = high_resolution_clock::now();
-            duration<double, milli> time_MultiSoA_search = end_MultiSoA_search - start_MultiSoA_search;
-            //----------------------------------------------------
-                //CUDA Search on SoA
-            cout << "CUDA Search on SoA..." << endl;
-            //----------------------------------------------------
-            /*
-            // Time CUDA SingleSearch
-            auto start_CUDA_SingleSoA_search = high_resolution_clock::now();
-            vector<vector<int>> risultati_CUDA_SingleSoA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, single_query, num_series, series_len);
-            auto end_CUDA_SingleSoA_search = high_resolution_clock::now();
-            duration<double, milli> time_CUDA_SingleSoA_search = end_CUDA_SingleSoA_search - start_CUDA_SingleSoA_search;
-            */
-            // Time CUDA MultiSearch
-            auto start_CUDA_MultiSoA_search = high_resolution_clock::now();
-            vector<vector<int>> risultati_CUDA_MultiSoA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len);
-            auto end_CUDA_MultiSoA_search = high_resolution_clock::now();
-            duration<double, milli> time_CUDA_MultiSoA_search = end_CUDA_MultiSoA_search - start_CUDA_MultiSoA_search;
-            /// memorizzare dati nelle matrici
-           matrixAoS[i][j].single_q = time_SingleAoS_search;
-           matrixAoS[i][j].multi_q = time_MultiAoS_search;
-
-           matrixSoA[i][j].single_q = time_SingleSoA_search;
-           matrixSoA[i][j].multi_q = time_MultiSoA_search;
-
-           //matrixSoA[i][j].single_q_cuda = time_CUDA_SingleSoA_search;
-           matrixSoA[i][j].multi_q_cuda = time_CUDA_MultiSoA_search;
-
-            bool is_correct = validateResults(risultati_MultiSoA, 
-                                  risultati_CUDA_MultiSoA, 
-                                  datasetSoA, 
-                                  all_queries, 
-                                  1e-4);
-
-        }   
-    }
-
-
-
-    /*
-    // trascrivo i dati in un file csv
-    ofstream outFile("C:\\Users\\jbrus\\Documents\\UNI\\MAGISTRALE\\PARALLEL\\PROGETTI\\MIDTERM_PATTERN_RECOGNITION\\src\\Search_results.csv");
-    outFile << "Format,QueryLength,NumQueries,Type,TimeMS\n";   
-
-    for (size_t i = 0; i < query_lengths.size(); ++i) {
-        for (size_t j = 0; j < query_numbers.size(); ++j) {
-            // Scriviamo i dati AoS
-            outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixAoS[i][j].single_q.count() << "\n";
-            outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixAoS[i][j].multi_q.count() << "\n";
-
-            // Scriviamo i dati SoA
-            outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q.count() << "\n";
-            outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q.count() << "\n";
-        }
-    }
-    outFile.close();
-    cout << "Dati salvati in Search_results.csv" << endl;
-    */
-
-
-    fs::path output_dir = fs::path("..") / "src";
-    fs::path output_file = output_dir / "Search_results.csv";
-
-    // Crea la cartella 'src' se non esiste già (evita errori di apertura file)
+    // --- 4. PREPARAZIONE FILE CSV ---
+    fs::path output_dir = fs::path("src");
     if (!fs::exists(output_dir)) {
         fs::create_directories(output_dir);
     }
-
-    ofstream outFile(output_file.string());
-
+    ofstream outFile((output_dir / "Search_results.csv").string());
     if (!outFile.is_open()) {
-        cerr << " Errore nell'apertura del file CSV in: " << output_file.string() << endl;
-    } else {
-        outFile << "Format,QueryLength,NumQueries,Type,TimeMS\n";   
-
-        for (size_t i = 0; i < query_lengths.size(); ++i) {
-            for (size_t j = 0; j < query_numbers.size(); ++j) {
-                // Scriviamo i dati AoS
-                outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixAoS[i][j].single_q.count() << "\n";
-                outFile << "AoS," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixAoS[i][j].multi_q.count() << "\n";
-
-                // Scriviamo i dati SoA
-                outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q.count() << "\n";
-                outFile << "SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q.count() << "\n";
-
-                // Scriviamo i dati SoA CUDA
-                //outFile << "CUDA_SoA," << query_lengths[i] << "," << query_numbers[j] << ",Single," << matrixSoA[i][j].single_q_cuda.count() << "\n";
-                outFile << "CUDA_SoA," << query_lengths[i] << "," << query_numbers[j] << ",Multi," << matrixSoA[i][j].multi_q_cuda.count() << "\n";
-            }
-        }
-    outFile.close();
-    cout << " Dati salvati con successo in: " << output_file.string() << endl;
+        cerr << "Impossibile creare Search_results.csv in " << output_dir.string() << endl;
+        return 1;
     }
-    cout << "\n[GPU] Rilascio memoria VRAM in corso..." << endl;
-    freeGPUMemory(const_cast<double*>(d_dataset_gpu));
-    cout << "[GPU] Memoria rilasciata con successo." << endl;
+    outFile << "Platform,Format,QueryLength,NumQueries,Threads,Mean_MS,StdDev_MS,Min_MS,Max_MS\n";
 
-    
+    // --- 5. BENCHMARKING SU PARAMETRI ---
+    for (int query_l : query_lengths) {
+        for (int query_n : query_numbers) {
+            cout << "\n------------------------------------------------------\n";
+            cout << "Configurazione: Query Len = " << query_l << " | Numero Queries = " << query_n << endl;
+            cout << "------------------------------------------------------\n";
+
+            // Creazione del batch di query casuali estratte dal dataset
+            vector<vector<double>> all_queries;
+            for (int q = 0; q < query_n; ++q) {
+                all_queries.push_back(RandomQuery(datasetSoA, query_l, gen));
+            }
+
+            // Benchmark CPU: esplorazione thread (1 = baseline sequenziale per speedup)
+            for (int t : thread_counts) {
+                omp_set_num_threads(t);
+                cout << "  -> OpenMP [Threads: " << t << "]..." << endl;
+
+                // Test AoS
+                for (int w = 0; w < WARMUP_RUNS; ++w) {
+                    MultiQueryParallelSearch_AoS(datasetAoS, all_queries);
+                }
+                vector<double> times_AoS;
+                for (int r = 0; r < NUM_RUNS; ++r) {
+                    auto start = high_resolution_clock::now();
+                    MultiQueryParallelSearch_AoS(datasetAoS, all_queries);
+                    auto end = high_resolution_clock::now();
+                    times_AoS.push_back(duration<double, milli>(end - start).count());
+                }
+                BenchmarkStats s_aos = computeStats(times_AoS);
+                outFile << "OpenMP,AoS," << query_l << "," << query_n << "," << t << ","
+                        << s_aos.mean_ms << "," << s_aos.stddev_ms << "," 
+                        << s_aos.min_ms << "," << s_aos.max_ms << "\n";
+
+                // Test SoA
+                for (int w = 0; w < WARMUP_RUNS; ++w) {
+                    MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
+                }
+                vector<double> times_SoA;
+                for (int r = 0; r < NUM_RUNS; ++r) {
+                    auto start = high_resolution_clock::now();
+                    MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
+                    auto end = high_resolution_clock::now();
+                    times_SoA.push_back(duration<double, milli>(end - start).count());
+                }
+                BenchmarkStats s_soa = computeStats(times_SoA);
+                outFile << "OpenMP,SoA," << query_l << "," << query_n << "," << t << ","
+                        << s_soa.mean_ms << "," << s_soa.stddev_ms << "," 
+                        << s_soa.min_ms << "," << s_soa.max_ms << "\n";
+
+                outFile.flush();
+            }
+
+            // Benchmark GPU: eseguito solo se compilato con CUDA e se una scheda NVIDIA è presente
+#if HAS_CUDA
+            if (run_gpu) {
+                cout << "  -> GPU CUDA Benchmark..." << endl;
+                
+                // Warm-up GPU
+                for (int w = 0; w < WARMUP_RUNS; ++w) {
+                    CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len);
+                }
+
+                vector<double> times_CUDA;
+                vector<vector<int>> res_CUDA;
+                for (int r = 0; r < NUM_RUNS; ++r) {
+                    auto start = high_resolution_clock::now();
+                    res_CUDA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len);
+                    auto end = high_resolution_clock::now();
+                    times_CUDA.push_back(duration<double, milli>(end - start).count());
+                }
+                BenchmarkStats s_cuda = computeStats(times_CUDA);
+                outFile << "CUDA,SoA," << query_l << "," << query_n << ",GPU,"
+                        << s_cuda.mean_ms << "," << s_cuda.stddev_ms << "," 
+                        << s_cuda.min_ms << "," << s_cuda.max_ms << "\n";
+                outFile.flush();
+
+                // Validazione correttezza CPU SoA vs GPU CUDA
+                vector<vector<int>> res_cpu = MultiQueryParallelSearch_SoA(datasetSoA, all_queries);
+                validateResults(res_cpu, res_CUDA, datasetSoA, all_queries, 1e-4);
+            }
+#endif
+        }
+    }
+
+    outFile.close();
+    cout << "\nBenchmark terminato. Risultati registrati in: " << (output_dir / "Search_results.csv").string() << endl;
+
+#if HAS_CUDA
+    if (run_gpu && d_dataset_gpu) {
+        cout << "[GPU] Rilascio della memoria VRAM..." << endl;
+        freeGPUMemory(const_cast<double*>(d_dataset_gpu));
+    }
+#endif
 
     return 0;
 }
