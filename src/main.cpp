@@ -294,7 +294,7 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // Benchmark GPU CUDA
+            // Benchmark GPU CUDA (default threadsPerBlock = 128)
 #if HAS_CUDA
             if (run_gpu) {
                 cout << "  -> GPU CUDA Benchmark..." << endl;
@@ -308,7 +308,7 @@ int main(int argc, char* argv[]) {
                 vector<vector<int>> res_CUDA;
                 for (int r = 0; r < NUM_RUNS; ++r) {
                     auto start = high_resolution_clock::now();
-                    res_CUDA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len);
+                    res_CUDA = CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len, 128);
                     auto end = high_resolution_clock::now();
                     times_CUDA.push_back(duration<double, milli>(end - start).count());
                 }
@@ -327,12 +327,13 @@ int main(int argc, char* argv[]) {
     }
 
     outFile.close();
-    cout << "\nBenchmark terminato. Risultati registrati in: " << (output_dir / "Search_results.csv").string() << endl;
+    cout << "\nBenchmark principale terminato. Dati in: " << (output_dir / "Search_results.csv").string() << endl;
 
+    // --- 6. BENCHMARK DEDICATO: EMPIRICAL TUNING DELLA DIMENSIONE DEI BLOCCHI ---
 #if HAS_CUDA
     if (run_gpu && d_dataset_gpu) {
         cout << "\n======================================================\n";
-        cout << "  BENCHMARK: OPTIMAL BLOCK DIMENSION (Fixed: L=500, Q=50)\n";
+        cout << "  EMPIRICAL TUNING: OPTIMAL BLOCK SIZE (Fixed: L=500, Q=50)\n";
         cout << "======================================================\n";
 
         const int fixed_L = 500;
@@ -342,37 +343,37 @@ int main(int argc, char* argv[]) {
             _queries.push_back(RandomQuery(datasetSoA, fixed_L, gen));
         }
 
-        vector<int> block_sizes = {32, 64, 128, 256, 512, 1024};
-        fs::path csv_path = output_dir / "block_results.csv";
-        ofstream sweepFile(csv_path.string());
+        vector<int> block_sizes = {32, 64, 128, 256, 512};
+        fs::path tuning_csv_path = output_dir / "block_results.csv";
+        ofstream tuningFile(tuning_csv_path.string());
         
-        if (sweepFile.is_open()) {
-            sweepFile << "BlockDim,Mean_MS,StdDev_MS,Min_MS,Max_MS\n";
+        if (tuningFile.is_open()) {
+            tuningFile << "BlockDim,Mean_MS,StdDev_MS,Min_MS,Max_MS\n";
             
             for (int bs : block_sizes) {
                 // Warm-up per ogni dimensione di blocco
                 CUDAMultiQuerySearch_SoA(d_dataset_gpu, _queries, num_series, series_len, bs);
 
-                vector<double> blockDim_times;
+                vector<double> block_times;
                 for (int r = 0; r < NUM_RUNS; ++r) {
                     auto start = high_resolution_clock::now();
                     CUDAMultiQuerySearch_SoA(d_dataset_gpu, _queries, num_series, series_len, bs);
                     auto end = high_resolution_clock::now();
-                    blockDim_times.push_back(duration<double, milli>(end - start).count());
+                    block_times.push_back(duration<double, milli>(end - start).count());
                 }
 
-                BenchmarkStats bs_stats = computeStats(blockDim_times);
+                BenchmarkStats bs_stats = computeStats(block_times);
                 cout << "  Block Dim: " << bs 
                      << " | Media: " << bs_stats.mean_ms << " ms"
                      << " | StdDev: +/-" << bs_stats.stddev_ms << " ms"
                      << " | Min: " << bs_stats.min_ms << " ms" << endl;
 
-                sweepFile << bs << "," << bs_stats.mean_ms << "," << bs_stats.stddev_ms << ","
-                          << bs_stats.min_ms << "," << bs_stats.max_ms << "\n";
-                sweepFile.flush();
+                tuningFile << bs << "," << bs_stats.mean_ms << "," << bs_stats.stddev_ms << ","
+                           << bs_stats.min_ms << "," << bs_stats.max_ms << "\n";
+                tuningFile.flush();
             }
-            sweepFile.close();
-            cout << "Risultati Block Sweep salvati in: " << csv_path.string() << endl;
+            tuningFile.close();
+            cout << "Risultati Block Tuning salvati in: " << tuning_csv_path.string() << endl;
         } else {
             cerr << "Errore creazione file block_results.csv!" << endl;
         }
