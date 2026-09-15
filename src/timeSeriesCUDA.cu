@@ -214,7 +214,7 @@ std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
                                                        const std::vector<std::vector<double>>& queries, 
                                                        int num_series, 
                                                        int series_length,
-                                                       int threadsPerBlock = 128) 
+                                                       int threadsPerBlock) 
 {
     int num_queries = queries.size();
     int query_len = queries[0].size(); // Assuming all queries have the same length
