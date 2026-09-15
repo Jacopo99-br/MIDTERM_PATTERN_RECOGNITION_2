@@ -222,7 +222,9 @@ int main(int argc, char* argv[]) {
 #endif
 
     // --- 4. PREPARAZIONE FILE CSV (Modalità append per preservare i dati precedenti) ---
-    fs::path output_dir = fs::path("src");
+    fs::path output_dir = (fs::current_path().filename() == "build") 
+                      ? fs::path("..") / "src" 
+                      : fs::path("src");
     if (!fs::exists(output_dir)) {
         fs::create_directories(output_dir);
     }
