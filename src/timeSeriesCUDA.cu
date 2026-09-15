@@ -213,7 +213,8 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
 std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
                                                        const std::vector<std::vector<double>>& queries, 
                                                        int num_series, 
-                                                       int series_length) 
+                                                       int series_length,
+                                                       int threadsPerBlock = 128) 
 {
     int num_queries = queries.size();
     int query_len = queries[0].size(); // Assuming all queries have the same length
@@ -223,8 +224,7 @@ std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset,
     int* d_results = nullptr;
     size_t results_bytes = num_queries * num_series * sizeof(int);
     CHECK_CUDA(cudaMalloc((void**)&d_results, results_bytes));
-
-    int threadsPerBlock = 128;
+    
     dim3 blocksPerGrid(num_series, num_queries); // per definire dimensioni blocchi e grighlie di thread lungo X,Y,Z
 
     size_t series_bytes = series_length * sizeof(double);

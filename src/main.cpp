@@ -301,7 +301,7 @@ int main(int argc, char* argv[]) {
                 
                 // Warm-up GPU
                 for (int w = 0; w < WARMUP_RUNS; ++w) {
-                    CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len);
+                    CUDAMultiQuerySearch_SoA(d_dataset_gpu, all_queries, num_series, series_len, 128);
                 }
 
                 vector<double> times_CUDA;
@@ -331,7 +331,53 @@ int main(int argc, char* argv[]) {
 
 #if HAS_CUDA
     if (run_gpu && d_dataset_gpu) {
-        cout << "[GPU] Rilascio della memoria VRAM..." << endl;
+        cout << "\n======================================================\n";
+        cout << "  BENCHMARK: OPTIMAL BLOCK DIMENSION (Fixed: L=500, Q=50)\n";
+        cout << "======================================================\n";
+
+        const int fixed_L = 500;
+        const int fixed_Q = 50;
+        vector<vector<double>> _queries;
+        for (int q = 0; q < fixed_Q; ++q) {
+            _queries.push_back(RandomQuery(datasetSoA, fixed_L, gen));
+        }
+
+        vector<int> block_sizes = {32, 64, 128, 256, 512, 1024};
+        fs::path csv_path = output_dir / "block_results.csv";
+        ofstream sweepFile(csv_path.string());
+        
+        if (sweepFile.is_open()) {
+            sweepFile << "BlockDim,Mean_MS,StdDev_MS,Min_MS,Max_MS\n";
+            
+            for (int bs : block_sizes) {
+                // Warm-up per ogni dimensione di blocco
+                CUDAMultiQuerySearch_SoA(d_dataset_gpu, _queries, num_series, series_len, bs);
+
+                vector<double> blockDim_times;
+                for (int r = 0; r < NUM_RUNS; ++r) {
+                    auto start = high_resolution_clock::now();
+                    CUDAMultiQuerySearch_SoA(d_dataset_gpu, _queries, num_series, series_len, bs);
+                    auto end = high_resolution_clock::now();
+                    blockDim_times.push_back(duration<double, milli>(end - start).count());
+                }
+
+                BenchmarkStats bs_stats = computeStats(blockDim_times);
+                cout << "  Block Dim: " << bs 
+                     << " | Media: " << bs_stats.mean_ms << " ms"
+                     << " | StdDev: +/-" << bs_stats.stddev_ms << " ms"
+                     << " | Min: " << bs_stats.min_ms << " ms" << endl;
+
+                sweepFile << bs << "," << bs_stats.mean_ms << "," << bs_stats.stddev_ms << ","
+                          << bs_stats.min_ms << "," << bs_stats.max_ms << "\n";
+                sweepFile.flush();
+            }
+            sweepFile.close();
+            cout << "Risultati Block Sweep salvati in: " << csv_path.string() << endl;
+        } else {
+            cerr << "Errore creazione file block_results.csv!" << endl;
+        }
+
+        cout << "\n[GPU] Rilascio della memoria VRAM..." << endl;
         freeGPUMemory(const_cast<double*>(d_dataset_gpu));
     }
 #endif

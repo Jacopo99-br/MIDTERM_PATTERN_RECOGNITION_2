@@ -26,6 +26,7 @@ std::vector<int> CUDASearch_SoA(const TimeSeries_SoA& dataset,
 std::vector<std::vector<int>> CUDAMultiQuerySearch_SoA(const double* d_dataset, 
                                                        const std::vector<std::vector<double>>& queries, 
                                                        int num_series, 
-                                                       int series_length);
+                                                       int series_length,
+                                                       int threadsPerBlock = 128);
 
 #endif // TIMESERIES_CUDA_CUH
