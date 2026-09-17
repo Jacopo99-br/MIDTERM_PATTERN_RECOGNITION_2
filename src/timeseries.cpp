@@ -202,7 +202,6 @@ vector<vector<int>> MultiQueryParallelSearch_AoS(const vector<TimeSeries>& datas
     #pragma omp parallel for collapse(2)
     for (int q_idx = 0; q_idx < numQueries; ++q_idx) {
         for (int i = 0; i < numDataRows; ++i) {
-            // La differenza è qui:
             all_results[q_idx][i] = SAD_Search(dataset[i].data.data(), dataset[i].data.size(), queries[q_idx]);
         }
     } 
