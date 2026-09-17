@@ -19,4 +19,4 @@ cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=75 ..
 make -j$(nproc)
 
 # 5. Esegui
-./Project_TSPR --gpu-only
+./Project_TSPR "$@"

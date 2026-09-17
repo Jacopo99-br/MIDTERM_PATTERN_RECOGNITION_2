@@ -48,7 +48,12 @@ df_cpu['Speedup'] = df_cpu['Base_TimeS'] / df_cpu['TimeS']
 
 # Caricamento Tuning GPU e Risultati GPU
 df_block = pd.read_csv(csv_block_path) if csv_block_path.exists() else None
-df_gpu = pd.read_csv(csv_gpu_path) if csv_gpu_path.exists() else None
+
+
+if csv_gpu_path.exists():
+    df_gpu = pd.read_csv(csv_gpu_path)
+else:
+    df_gpu = df_search[df_search['Platform'] == 'CUDA'].copy()
 
 # Stile grafico uniforme
 NAVY = '#003366'
